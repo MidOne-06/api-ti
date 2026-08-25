@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cargar stock final | Dim Sum</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header><div class="brand"><span class="mark">Pe</span><div><b>DIM SUM</b><small>Logística · Cargar stock final</small></div></div><span class="session">Sesión segura por consulta</span></header>
+    <main>
+      <section class="filters">
+        <div><p class="eyebrow">CARGAR STOCK FINAL</p><h1>Cuadre manual de stock</h1><p class="muted">Carga el stock final por ítem de un almacén y guárdalo como un nuevo cuadre en Restaurant.pe.</p></div>
+        <form id="filters-form">
+          <label>Local <select id="local" required></select></label>
+          <label>Almacén <select id="almacen" required></select></label>
+          <label>Tipo de ítem <select id="tipo"></select></label>
+          <label>Categoría <select id="categoria"></select></label>
+          <label>Registros a cargar <select id="registros"><option value="100">100</option><option value="250">250</option><option value="500" selected>500</option></select></label>
+          <fieldset class="date-field"><legend>Fecha del cuadre</legend><input id="fecha" type="datetime-local" required></fieldset>
+          <fieldset class="items-field"><legend>Buscar ítem</legend><input id="busqueda" type="search" autocomplete="off" placeholder="Filtrar por nombre o código (opcional)"></fieldset>
+          <fieldset class="items-field"><legend>Motivo del cuadre</legend><input id="razon" type="text" autocomplete="off" placeholder="Motivo del cuadre (opcional)"></fieldset>
+          <button type="submit">Cargar ítems</button>
+        </form>
+      </section>
+      <p id="status" role="status"></p>
+      <section class="results">
+        <div class="results-head"><div><h2>Ítems del almacén</h2><p id="summary">Selecciona local y almacén, luego presiona "Cargar ítems".</p></div></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Código</th><th>Ítem</th><th>Categoría</th><th>Stock actual</th><th>Stock final</th><th>Costo actual</th><th>Costo nuevo</th><th>Variación</th><th>Valorización</th></tr></thead>
+            <tbody id="rows"><tr><td colspan="9" class="empty">Sin ítems cargados.</td></tr></tbody>
+          </table>
+        </div>
+        <div class="toolbar">
+          <span id="changedSummary" class="muted">0 de 0 ítems con cambios.</span>
+          <button type="button" id="guardarBtn" disabled>Guardar cuadre manual</button>
+        </div>
+        <div id="resultBanner"></div>
+      </section>
+    </main>
+    <dialog id="confirmDialog" class="confirm-dialog">
+      <section class="confirm-panel">
+        <header><p class="eyebrow">CONFIRMAR GUARDADO</p><h2>¿Guardar este cuadre de stock?</h2></header>
+        <p class="muted">Esta acción crea un cuadre real en Restaurant.pe y no se puede deshacer desde aquí.</p>
+        <dl>
+          <dt>Local</dt><dd id="confirmLocal">—</dd>
+          <dt>Almacén</dt><dd id="confirmAlmacen">—</dd>
+          <dt>Fecha del cuadre</dt><dd id="confirmFecha">—</dd>
+          <dt>Motivo</dt><dd id="confirmRazon">—</dd>
+          <dt>Ítems a guardar</dt><dd id="confirmCantidad">—</dd>
+        </dl>
+        <footer>
+          <button type="button" id="cancelConfirm" class="btn-secondary">Cancelar</button>
+          <button type="button" id="acceptConfirm">Sí, guardar</button>
+        </footer>
+      </section>
+    </dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

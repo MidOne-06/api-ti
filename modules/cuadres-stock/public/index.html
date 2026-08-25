@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cuadres de stock | Dim Sum</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header><div class="brand"><span class="mark">Pe</span><div><b>DIM SUM</b><small>Logística · Cuadres de stock</small></div></div><span class="session">Sesión segura por consulta</span></header>
+    <main>
+      <section class="filters">
+        <div><p class="eyebrow">CUADRES DE STOCK</p><h1>Consulta y filtros</h1><p class="muted">La información se obtiene con una sesión actualizada en cada búsqueda.</p></div>
+        <form id="filters-form">
+          <fieldset class="locals-field"><legend>Locales</legend><div id="locales" class="locals-list" aria-label="Selecciona uno o más locales"></div><small>Todos los locales están seleccionados inicialmente.</small></fieldset>
+          <fieldset class="items-field"><legend>Contiene insumo/producto <small>Máx. (5)</small></legend><input id="itemSearch" type="search" autocomplete="off" placeholder="Escribe para buscar un insumo o producto"><div id="itemSuggestions" class="suggestions" hidden></div><div id="selectedItems" class="selected-items" aria-live="polite"></div></fieldset>
+          <label>Estado <select id="estado"></select></label>
+          <label>Tipo de cuadre <select id="tipo"></select></label>
+          <fieldset class="date-field"><legend>Rango de fechas</legend><div class="date-inputs"><label>Desde <input id="fechaInicio" type="date" required></label><label>Hasta <input id="fechaFin" type="date" required></label></div><div class="date-presets" aria-label="Accesos rápidos de fecha"><button type="button" data-range="today">Hoy</button><button type="button" data-range="yesterday">Ayer</button><button type="button" data-range="last7">Últimos 7 días</button><button type="button" data-range="month">Este mes</button></div><small id="dateSummary" aria-live="polite"></small></fieldset>
+          <button type="submit">Aplicar filtros</button>
+        </form>
+      </section>
+      <p id="status" role="status"></p>
+      <section class="cards" aria-label="Resumen"><article><span>Cantidad de cuadres</span><strong id="cantidad">—</strong></article><article><span>Sobrevalorización</span><strong id="sobre">—</strong></article><article><span>Pérdida</span><strong id="perdida">—</strong></article></section>
+      <section class="results"><div class="results-head"><div><h2>Resultados</h2><p id="summary">Selecciona filtros para consultar.</p></div></div><div class="table-wrap"><table><thead><tr><th>Cód.</th><th>Fecha</th><th>Local</th><th>Sobrevalorización</th><th>Pérdida</th><th>Motivo</th><th>Responsable</th><th>Tipo</th><th>Estado</th></tr></thead><tbody id="rows"><tr><td colspan="9" class="empty">Sin consulta.</td></tr></tbody></table></div></section>
+      <section id="stockReports" class="results stock-reports" hidden><div class="results-head"><div><p class="eyebrow">REPORTES CONSOLIDADOS</p><h2>Stock según filtros aplicados</h2><p id="reportSummary">Generando…</p></div></div><fieldset class="report-filters"><legend>Filtrar resultados consolidados</legend><label>Local <select id="reportLocal"><option value="">Todos los locales</option></select></label><label>Almacén <select id="reportWarehouse"><option value="">Todos los almacenes</option></select></label><label>Ítem <select id="reportItem"><option value="">Todos los ítems</option></select></label><label>Tipo <select id="reportType"><option value="">Todos los tipos</option></select></label><button id="clearReportFilters" type="button">Limpiar filtros</button></fieldset><div class="report-tabs"><button type="button" class="report-tab active" data-report="master">Maestro operativo</button><button type="button" class="report-tab" data-report="summary">Resumen por local e ítem</button></div><div id="masterReport" class="report-view"><div class="table-wrap"><table><thead><tr><th>Local</th><th>Almacén</th><th>Ítem</th><th>Tipo</th><th>Último cuadre</th><th>Stock actual</th></tr></thead><tbody id="masterReportRows"></tbody></table></div></div><div id="summaryReport" class="report-view" hidden><div class="table-wrap"><table><thead><tr><th>Local</th><th>Ítem</th><th>Almacenes</th><th>Stock consolidado</th></tr></thead><tbody id="summaryReportRows"></tbody></table></div></div><nav class="report-pagination" aria-label="Paginación del reporte consolidado"><label>Filas por página <select id="reportPageSize"><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label><span id="reportPageInfo" aria-live="polite"></span><button id="reportPrevious" type="button">Anterior</button><button id="reportNext" type="button">Siguiente</button></nav></section>
+    </main>
+    <dialog id="detailDialog" class="detail-dialog"><section class="detail-panel"><header><div><p class="eyebrow">DETALLE DE CUADRE</p><h2 id="detailTitle">Cargando…</h2></div><button type="button" class="icon-button" id="closeDetail" aria-label="Cerrar detalle">×</button></header><p id="detailMeta" class="detail-meta"></p><div class="table-wrap"><table class="detail-table"><thead><tr><th>Ítem</th><th>Almacén</th><th>Aumento</th><th>Disminución</th><th>Costo</th><th>Impuestos</th><th>Total</th><th>Stock anterior</th><th>Stock actual</th><th>Valorización</th></tr></thead><tbody id="detailRows"></tbody></table></div><footer><button type="button" id="closeDetailFooter">Cerrar</button></footer></section></dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

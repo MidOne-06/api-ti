@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Panel Dim Sum</title>
+    <style>
+      :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#20334f;background:#f3f6fb}
+      *{box-sizing:border-box}
+      body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:10vh 5vw}
+      header{display:flex;gap:12px;align-items:center;margin-bottom:40px}
+      .mark{background:#f5872c;color:white;font-weight:800;border-radius:50%;width:40px;height:40px;display:grid;place-items:center}
+      header b{display:block;letter-spacing:.04em}
+      header small{display:block;color:#75839b;margin-top:2px}
+      .modules{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;width:100%;max-width:900px}
+      a.module-card{display:block;background:white;border:1px solid #dce5f2;border-radius:14px;padding:24px;box-shadow:0 6px 20px #1d38500b;text-decoration:none;color:inherit}
+      a.module-card:hover{border-color:#75a9e1}
+      .module-card .eyebrow{font-size:.75rem;letter-spacing:.1em;color:#3e86d8;font-weight:800;margin:0}
+      .module-card h2{margin:.4rem 0;color:#253b5d}
+      .module-card p{margin:0;color:#77859c;font-size:.9rem}
+    </style>
+  </head>
+  <body>
+    <header><span class="mark">Pe</span><div><b>DIM SUM</b><small>Panel de operaciones</small></div></header>
+    <nav class="modules">
+      <a class="module-card" href="/cuadres-stock/">
+        <p class="eyebrow">CUADRES DE STOCK</p>
+        <h2>Consulta y reportes</h2>
+        <p>Filtra cuadres de stock manual por local, fecha e ítem, y genera reportes consolidados de inventario.</p>
+      </a>
+      <a class="module-card" href="/cargar-stock-final/">
+        <p class="eyebrow">CARGAR STOCK FINAL</p>
+        <h2>Cuadre manual de stock</h2>
+        <p>Carga el stock final por ítem de un almacén y guárdalo como un nuevo cuadre en Restaurant.pe.</p>
+      </a>
+      <a class="module-card" href="/ventas/">
+        <p class="eyebrow">VENTAS</p>
+        <h2>Consulta de ventas</h2>
+        <p>Filtra ventas por local, fecha, comprobante y moneda, y revisa el detalle de cada venta.</p>
+      </a>
+    </nav>
+  </body>
+</html>

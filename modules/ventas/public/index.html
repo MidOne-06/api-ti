@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ventas | Dim Sum</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header><div class="brand"><span class="mark">Pe</span><div><b>DIM SUM</b><small>Logística · Ventas</small></div></div><span class="session">Sesión segura por consulta</span></header>
+    <main>
+      <section class="filters">
+        <div><p class="eyebrow">VENTAS</p><h1>Consulta y filtros</h1><p class="muted">La información se obtiene con una sesión actualizada en cada búsqueda.</p></div>
+        <form id="filters-form">
+          <fieldset class="locals-field"><legend>Locales</legend><div id="locales" class="locals-list" aria-label="Selecciona uno o más locales"></div><small>Todos los locales están seleccionados inicialmente.</small></fieldset>
+          <label>Moneda <select id="moneda"></select></label>
+          <label>Tipo de comprobante <select id="comprobante"></select></label>
+          <label>Estado <select id="estado"></select></label>
+          <label>Orden <select id="orden"></select></label>
+          <label>Registros por página <select id="registros"><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label>
+          <fieldset class="date-field"><legend>Rango de fechas</legend><div class="date-inputs"><label>Desde <input id="fechaInicio" type="date" required></label><label>Hasta <input id="fechaFin" type="date" required></label></div><div class="date-presets" aria-label="Accesos rápidos de fecha"><button type="button" data-range="today">Hoy</button><button type="button" data-range="yesterday">Ayer</button><button type="button" data-range="last7">Últimos 7 días</button><button type="button" data-range="month">Este mes</button></div><small id="dateSummary" aria-live="polite"></small></fieldset>
+          <button type="submit">Aplicar filtros</button>
+        </form>
+      </section>
+      <p id="status" role="status"></p>
+      <section class="results"><div class="results-head"><div><h2>Resultados</h2><p id="summary">Selecciona filtros para consultar.</p></div></div><div class="table-wrap"><table><thead><tr><th>Cód.</th><th>Fecha</th><th>Local</th><th>Local destino</th><th>Cliente</th><th>RUC</th><th>Comprobante</th><th>Moneda</th><th>Subtotal</th><th>Impuestos</th><th>Total</th><th>Forma de pago</th><th>Estado</th><th>Usuario</th></tr></thead><tbody id="rows"><tr><td colspan="14" class="empty">Sin consulta.</td></tr></tbody></table></div><nav class="report-pagination" aria-label="Paginación de resultados"><span id="pageInfo" aria-live="polite"></span><button id="pagePrevious" type="button">Anterior</button><button id="pageNext" type="button">Siguiente</button></nav></section>
+    </main>
+    <dialog id="detailDialog" class="detail-dialog"><section class="detail-panel"><header><div><p class="eyebrow">DETALLE DE VENTA</p><h2 id="detailTitle">Cargando…</h2></div><button type="button" class="icon-button" id="closeDetail" aria-label="Cerrar detalle">×</button></header><p id="detailMeta" class="detail-meta"></p><div class="table-wrap"><table class="detail-table"><thead><tr><th>Ítem</th><th>Cantidad</th><th>Precio</th><th>Descuento</th><th>Importe</th></tr></thead><tbody id="detailRows"></tbody></table></div><div id="detailPagos"></div><footer><button type="button" id="closeDetailFooter">Cerrar</button></footer></section></dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
