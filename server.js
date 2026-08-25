@@ -6,10 +6,11 @@ import * as cuadresStock from './modules/cuadres-stock/service.js';
 import * as cargarStockFinal from './modules/cargar-stock-final/service.js';
 import * as ventas from './modules/ventas/service.js';
 import * as kardex from './modules/kardex/service.js';
+import * as requerimientosStock from './modules/requerimientos-stock/service.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const ROOT_PUBLIC_DIR = join(process.cwd(), 'public');
-const modules = [cuadresStock, cargarStockFinal, ventas, kardex];
+const modules = [cuadresStock, cargarStockFinal, ventas, kardex, requerimientosStock];
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
