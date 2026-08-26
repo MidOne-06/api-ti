@@ -28,6 +28,13 @@ async function handleApi(pathname, url, request, response) {
     if (pathname === '/api/lista') {
       return json(response, 200, await withSession((page, session) => listarRequerimientos(page, session, url)));
     }
+    if (pathname === '/api/plantillas') {
+      return json(response, 200, await withSession((page, session) => listarPlantillas(page, session, url)));
+    }
+    if (pathname === '/api/plantillas/importar' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => importarPlantilla(page, session, body)));
+    }
     if (pathname === '/api/guardar' && request.method === 'POST') {
       const body = await readJsonBody(request);
       const result = await withSession((page, session) => guardarRequerimiento(page, session, body));
@@ -38,6 +45,89 @@ async function handleApi(pathname, url, request, response) {
     console.error(error.message);
     return json(response, 502, { error: error.message || 'No se pudo consultar Logística. Intenta nuevamente.' });
   }
+}
+
+async function listarPlantillas(page, session, url) {
+  const localId = String(url.searchParams.get('local_id') ?? session.localId ?? '');
+  const pageNumber = Math.max(1, Number.parseInt(url.searchParams.get('pagina') ?? '1', 10) || 1);
+  const records = Math.min(100, Math.max(10, Number.parseInt(url.searchParams.get('registros') ?? '25', 10) || 25));
+  const encoded = Buffer.from(JSON.stringify({ local_id: localId, pagina: pageNumber, registros: records })).toString('base64');
+  const result = await apiGet(page, session.token, `/logistica/rest/requerimientomovimiento/obtenerPlantillaRequerimientoPorLocal/${encodeURIComponent(encoded)}`);
+  const rows = Array.isArray(result.data) ? result.data : [];
+  return {
+    total: Number(result.totalCount ?? rows.length),
+    rows: rows.map((template) => ({
+      id: String(template.plantillarequerimiento_id),
+      nombre: template.plantillarequerimiento_nombre ?? '',
+      encargado: template.plantillarequerimiento_encargado ?? '',
+      receptor: template.plantillarequerimiento_receptor ?? '',
+      observacion: template.plantillarequerimiento_observacion ?? '',
+      local_origen: template.local?.local_descripcion ?? '',
+      local_origen_id: String(template.local?.local_id ?? template.local_id ?? ''),
+      local_produccion: template.localproduccion?.local_descripcion ?? '',
+      local_produccion_id: String(template.localproduccion?.local_id ?? template.plantillarequerimiento_localproduccionid ?? ''),
+      recetas: sanitizeTemplateDetails(template.detalle_recetas),
+      insumos: sanitizeTemplateDetails(template.detalle_insumos),
+      productos: sanitizeTemplateDetails(template.detalle_productos),
+    })),
+  };
+}
+
+async function importarPlantilla(page, session, body) {
+  const id = String(body.templateId ?? '');
+  if (!/^\d+$/.test(id)) throw new Error('Selecciona una plantilla válida.');
+  const omitZero = body.incluirCantidadesCero ? '0' : '1';
+  const result = await apiPost(
+    page,
+    session.token,
+    `/logistica/rest/requerimientomovimiento/obtenerPlantillarequerimientoParaImportar/${omitZero}`,
+    [id],
+  );
+  return sanitizeImportedTemplate(result.data ?? {});
+}
+
+function sanitizeTemplateDetails(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => item?.item_id).map((item) => ({
+    id: String(item.item_id),
+    codigo: item.item_codigo ?? '',
+    descripcion: item.item_descripcion ?? '',
+    presentacion: item.presentacion_nombre ?? item.item_presentacion ?? '',
+    cantidad: Number(item.item_cantidad ?? 0),
+    unidad: item.unidadmedida_descripcion_unidad ?? item.unidadmedidainsumo_descripcion ?? '',
+  }));
+}
+
+function sanitizeImportedTemplate(data) {
+  const template = Array.isArray(data.plantillarequerimientoList) ? data.plantillarequerimientoList[0] : null;
+  const details = Array.isArray(data.detalleplantillarequerimientoList) ? data.detalleplantillarequerimientoList : [];
+  if (!template) throw new Error('No se pudo obtener el contenido de la plantilla seleccionada.');
+  return {
+    id: String(template.plantillarequerimiento_id),
+    localOrigenId: String(template.local?.local_id ?? template.local_id ?? ''),
+    localDestinoId: String(template.localproduccion?.local_id ?? template.plantillarequerimiento_localproduccionid ?? ''),
+    encargado: template.plantillarequerimiento_encargado ?? '',
+    receptor: template.plantillarequerimiento_receptor ?? '',
+    observacion: template.plantillarequerimiento_observacion ?? '',
+    items: details.filter((item) => item?.item_id).map((item) => ({ item: toImportableItem(item), cantidad: Number(item.item_cantidad ?? 0) })),
+  };
+}
+
+// El detalle de Logística contiene árboles grandes de relaciones. El formulario
+// solo necesita estos datos para mostrar el ítem y formar el payload de guardado.
+function toImportableItem(item) {
+  const unitId = item.unidadmedidainsumo_id ?? item.unidadmedidainsumo?.unidadmedidainsumo_id ?? 1;
+  const unitName = item.unidadmedida_descripcion_unidad ?? item.unidadmedidainsumo?.unidadmedidainsumo_descripcion ?? '';
+  return {
+    item_id: String(item.item_id),
+    item_tipo: String(item.item_tipo ?? 1),
+    item_codigo: item.item_codigo ?? '',
+    item_descripcion: item.item_descripcion ?? item.item_descripcion_original ?? '',
+    item_presentacionid: String(item.presentacioninsumo_id ?? item.presentacioncompraproducto_id ?? item.presentacion_id ?? ''),
+    item_presentacion: item.item_presentacion ?? item.presentacion_nombre ?? '',
+    unidadmedidainsumo_id: String(unitId),
+    unidadmedidainsumo_descripcion: unitName,
+    unidadmedidainsumo: { unidadmedidainsumo_id: String(unitId), unidadmedidainsumo_descripcion: unitName },
+  };
 }
 
 // Consulta de solo lectura que utiliza exactamente la misma fuente que el
