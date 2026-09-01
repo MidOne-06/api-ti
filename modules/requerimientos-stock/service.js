@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { json, readJsonBody, serveStatic } from '../../lib/http.js';
-import { apiGet, apiPost, fetchLocals, withSession } from '../../lib/restaurant-session.js';
+import { apiGet, apiPost, fetchLocals, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
 
 export const prefix = '/requerimientos-stock';
 export const publicDir = join(dirname(fileURLToPath(import.meta.url)), 'public');
@@ -27,6 +27,28 @@ async function handleApi(pathname, url, request, response) {
     }
     if (pathname === '/api/lista') {
       return json(response, 200, await withSession((page, session) => listarRequerimientos(page, session, url)));
+    }
+    if (pathname === '/api/detalle') {
+      const id = url.searchParams.get('id');
+      if (!/^\d+$/.test(String(id))) return json(response, 400, { error: 'Código de requerimiento inválido.' });
+      return json(response, 200, await withSession((page, session) => obtenerDetalleRequerimiento(page, session, id)));
+    }
+    if (pathname === '/api/historial') {
+      const id = url.searchParams.get('id');
+      if (!/^\d+$/.test(String(id))) return json(response, 400, { error: 'Código de requerimiento inválido.' });
+      return json(response, 200, await withSession((page, session) => obtenerHistorialRequerimiento(page, session, id)));
+    }
+    if (pathname === '/api/acciones/aprobar' && request.method === 'POST') {
+      const { id } = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => aprobarRequerimiento(page, session, id)));
+    }
+    if (pathname === '/api/acciones/rechazar' && request.method === 'POST') {
+      const { id, motivo } = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => rechazarRequerimiento(page, session, id, motivo)));
+    }
+    if (pathname === '/api/acciones/anular' && request.method === 'POST') {
+      const { id } = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => anularRequerimiento(page, session, id)));
     }
     if (pathname === '/api/plantillas') {
       return json(response, 200, await withSession((page, session) => listarPlantillas(page, session, url)));
@@ -181,6 +203,124 @@ async function listarRequerimientos(page, session, url) {
   // se muestra el mínimo comprobable (las filas de la página actual).
   const total = Number(result.totalregistros ?? payload.totalregistros ?? payload.totalCount ?? result.totalCount ?? rows.length);
   return { filters, total, rows: rows.map(mapRequirement) };
+}
+
+// Fuente que utiliza la vista de resumen de Restaurant.pe. Se conservan la
+// cabecera y el detalle reales, sin reconstruirlos a partir del listado.
+async function obtenerDetalleRequerimiento(page, session, id) {
+  const result = await apiGet(
+    page,
+    session.token,
+    `/logistica/rest/requerimientomovimiento/obtenerDetalleRequerimientoPorRequerimientoId/${encodeURIComponent(id)}`,
+  );
+  const data = result.data ?? {};
+  const cabecera = data.result_requerimiento ?? data.requerimientomovimiento ?? {};
+  const detalles = Array.isArray(data.result_detalle) ? data.result_detalle : (Array.isArray(data.detallerequerimiento) ? data.detallerequerimiento : []);
+  const estadoCode = firstValue(cabecera, ['requerimientomovimiento_estado']);
+  const estado = firstValue(cabecera.estado ?? {}, ['estado_descripcion'], firstValue(cabecera, ['requerimientomovimiento_estadoDescripcion', 'estado_descripcion']))
+    || ({ '0': 'Anulado', '1': 'Pendiente', '2': 'Aprobado', '3': 'Rechazado', '4': 'Atendido' }[String(estadoCode)] ?? estadoCode);
+
+  return {
+    cabecera: {
+      codigo: firstValue(cabecera, ['requerimientomovimiento_id', 'id']),
+      fecha_registro: firstValue(cabecera, ['requerimientomovimiento_fecharegistro']),
+      fecha_abastecimiento: firstValue(cabecera, ['requerimientomovimiento_fecha']),
+      solicitado_por: firstValue(cabecera.localSolicitante ?? {}, ['local_descripcion'], firstValue(cabecera, ['local_origen', 'local_descripcion'])),
+      local_produccion: firstValue(cabecera.localProduccion ?? {}, ['local_descripcion'], firstValue(cabecera, ['local_produccion', 'localproduccion_descripcion'])),
+      encargado: firstValue(cabecera, ['requerimientomovimiento_encargado']),
+      receptor: firstValue(cabecera, ['requerimientomovimiento_receptor']),
+      estado,
+      observacion: firstValue(cabecera, ['requerimientomovimiento_observacion']),
+    },
+    // Se entrega el origen íntegro para que CRM pueda preservar todos los
+    // datos recuperados, aunque la vista solo utilice el mapeo normalizado.
+    origen_restaurant: { cabecera, detalles },
+    detalles: detalles.filter((detalle) => detalle?.item_id).map((detalle) => ({
+      erp_detalle_id: firstValue(detalle, ['detallerequerimiento_id']),
+      codigo: firstValue(detalle, ['item_codigo']),
+      item: firstValue(detalle, ['item_descripcion_completa', 'item_descripcion', 'producto_descripcion', 'nombreProducto']),
+      categoria: firstValue(detalle, ['item_categoria'], firstValue(detalle.categoria ?? {}, ['categoriareceta_descripcion'])),
+      presentacion: firstValue(detalle, ['item_presentacion'], firstValue(detalle.presentacion ?? {}, ['presentacioninsumo_nombre', 'presentacion_nombre'])),
+      cantidad_solicitada: Number(detalle.detallerequerimiento_cantidad ?? detalle.item_cantidad ?? 0),
+      cantidad_despachada: Number(detalle.detallerequerimiento_cantidaddespachada ?? 0),
+      cantidad_preparada: Number(detalle.detallerequerimiento_cantidadpreparada ?? 0),
+      unidad: firstValue(detalle, ['detallerequerimiento_um', 'producto_unidadmedida'], firstValue(detalle.unidadmedidainsumo ?? {}, ['unidadmedidainsumo_descripcion'])),
+      almacen: firstValue(detalle.almacenDestino ?? {}, ['almacen_descripcion']),
+      observacion: firstValue(detalle, ['detallerequerimiento_observacion', 'item_observacion']),
+      payload_restaurant: detalle,
+    })),
+  };
+}
+
+// Historial nativo de Restaurant.pe. Se mantiene separado de las
+// sincronizaciones locales: el primero describe las acciones de usuarios en
+// Restaurant; el segundo acredita cuándo CRM actualizó su copia de consulta.
+async function obtenerHistorialRequerimiento(page, session, id) {
+  const result = await apiGet(
+    page,
+    session.token,
+    `/logistica/rest/common/obtenerHistoricoCambios/REQUERIMIENTOMOVIMIENTO/${encodeURIComponent(id)}`,
+  );
+
+  return {
+    eventos: (Array.isArray(result.data) ? result.data : []).map((evento) => {
+      const source = sanitizeRemoteData(evento);
+
+      return {
+        fecha: firstValue(source, ['historicocambio_fecharegistro', 'historicocambio_fecha', 'fecha', 'created_at']),
+        evento: firstValue(source, ['historicocambio_descripcion', 'historicocambio_accion', 'descripcion', 'accion', 'mensaje']),
+        usuario: firstValue(source.usuario ?? {}, ['usuario_nick', 'usuario_nombre'], firstValue(source, ['usuario_nick', 'usuario_nombre', 'usuario'])),
+        origen_restaurant: source,
+      };
+    }),
+  };
+}
+
+function requirementId(id) {
+  const value = String(id ?? '').trim();
+  if (!/^\d+$/.test(value)) throw new Error('Código de requerimiento inválido.');
+  return value;
+}
+
+function actionResult(result) {
+  return {
+    ok: true,
+    mensajes: Array.isArray(result.mensajes) ? result.mensajes : [],
+  };
+}
+
+async function aprobarRequerimiento(page, session, id) {
+  const result = await apiGet(
+    page,
+    session.token,
+    `/logistica/rest/requerimientomovimiento/requerimientomovimiento/aprobar/${requirementId(id)}`,
+  );
+
+  return actionResult(result);
+}
+
+async function rechazarRequerimiento(page, session, id, motivo) {
+  const reason = String(motivo ?? '').trim();
+  if (!reason) throw new Error('Indica el motivo del rechazo.');
+
+  const result = await apiPost(
+    page,
+    session.token,
+    `/logistica/rest/requerimientomovimiento/requerimientomovimiento/rechazar/${requirementId(id)}`,
+    { motivo: reason.slice(0, 80) },
+  );
+
+  return actionResult(result);
+}
+
+async function anularRequerimiento(page, session, id) {
+  const result = await apiGet(
+    page,
+    session.token,
+    `/logistica/rest/requerimientomovimiento/anularRequerimientoMovimiento/${requirementId(id)}`,
+  );
+
+  return actionResult(result);
 }
 
 function normalizeDate(value, endOfDay) {

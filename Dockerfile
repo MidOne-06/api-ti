@@ -3,7 +3,8 @@
 # Imagen oficial de Playwright: ya trae Chromium + todas las libs de sistema
 # que necesita para correr headless (evita tener que instalarlas a mano en
 # una imagen node:alpine, que no las trae y falla en runtime).
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+# Debe coincidir con playwright-core resuelto por package-lock.json.
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy
 
 WORKDIR /app
 

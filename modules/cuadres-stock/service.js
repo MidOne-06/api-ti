@@ -95,8 +95,11 @@ async function fetchCuadreDetail(page, session, id) {
       const costoSinImpuestos = Number(item.detallecuadremanual_costopromediosinimpuestos ?? 0);
       return {
         id: item.detallecuadremanual_id,
+        itemId: item.item_id == null ? '' : String(item.item_id),
+        itemCodigo: item.item_codigo ?? '',
         item: item.descripcionProductoInsumo,
         tipo: item.tipoItemDescripcion,
+        almacenId: item.almacen_id == null ? '' : String(item.almacen_id),
         almacen: item.almacen?.almacen_descripcion ?? '',
         aumento,
         disminuyo,
@@ -107,6 +110,7 @@ async function fetchCuadreDetail(page, session, id) {
         stockActual: stockAnterior + aumento - disminuyo,
         unidad: item.unidadmedidainsumo?.unidadmedidainsumo_sigla ?? '',
         valorizacion: (aumento - disminuyo) * costoTotal,
+        payloadRestaurant: sanitizeRemoteData(item),
       };
     }),
   };
