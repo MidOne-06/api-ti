@@ -218,7 +218,7 @@ async function obtenerDetalleRequerimiento(page, session, id) {
   const detalles = Array.isArray(data.result_detalle) ? data.result_detalle : (Array.isArray(data.detallerequerimiento) ? data.detallerequerimiento : []);
   const estadoCode = firstValue(cabecera, ['requerimientomovimiento_estado']);
   const estado = firstValue(cabecera.estado ?? {}, ['estado_descripcion'], firstValue(cabecera, ['requerimientomovimiento_estadoDescripcion', 'estado_descripcion']))
-    || ({ '0': 'Anulado', '1': 'Pendiente', '2': 'Aprobado', '3': 'Rechazado', '4': 'Atendido' }[String(estadoCode)] ?? estadoCode);
+    || ({ '0': 'Anulado', '1': 'Pendiente', '2': 'Aprobado', '3': 'Rechazado', '4': 'Despachado', '5': 'Recibido' }[String(estadoCode)] ?? estadoCode);
 
   return {
     cabecera: {
@@ -480,6 +480,12 @@ async function guardarRequerimiento(page, session, body) {
     observacion = '',
     fecha,
     esSolicitudCompra = false,
+    esSoloPlantilla = false,
+    generarPlantilla = false,
+    nombrePlantilla = '',
+    mostrarCostos = false,
+    mostrarPrecio = false,
+    plantillaId = null,
     items,
   } = body;
 
@@ -488,6 +494,12 @@ async function guardarRequerimiento(page, session, body) {
   }
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('Agrega al menos un ítem al requerimiento.');
+  }
+  if ((esSoloPlantilla || generarPlantilla) && !String(nombrePlantilla).trim()) {
+    throw new Error('Indica el nombre de la plantilla.');
+  }
+  if (plantillaId != null && !/^\d+$/.test(String(plantillaId))) {
+    throw new Error('La plantilla a actualizar no es válida.');
   }
 
   const [locales, almacenesOrigen] = await Promise.all([
@@ -556,17 +568,20 @@ async function guardarRequerimiento(page, session, body) {
   const { fechaDeMovimiento, requerimientomovimiento_fecha } = buildFechaMovimiento(fecha);
 
   const requerimiento = {
-    esSoloPlantilla: '0',
+    // Estas banderas y nombres se conservaron del payload capturado de
+    // Restaurant. Son mutuamente excluyentes en CRM antes de llegar aquí.
+    esSoloPlantilla: esSoloPlantilla ? '1' : '0',
     esSolicitudCompra: esSolicitudCompra ? '1' : '0',
-    mostrarCostos: '0',
-    mostrarPrecio: '0',
+    mostrarCostos: mostrarCostos ? '1' : '0',
+    mostrarPrecio: mostrarPrecio ? '1' : '0',
     mostrarRegistrar: true,
     fechaDeMovimiento,
     localSeleccionado,
     requerimientomovimiento_encargado: encargado,
     requerimientomovimiento_receptor: receptor,
     requerimientomovimiento_observacion: observacion,
-    esplantilla: '0',
+    esplantilla: generarPlantilla ? '1' : '0',
+    requerimientomovimiento_nombreplantilla: (generarPlantilla || esSoloPlantilla) ? String(nombrePlantilla).trim() : '',
     detallerequerimientomovimiento: detalles,
     localDestinoList: locales,
     almacenDestinoList: [almacenSeleccionado],
@@ -580,7 +595,17 @@ async function guardarRequerimiento(page, session, body) {
     requerimientomovimiento_fecha,
   };
 
-  const result = await apiPost(page, session.token, '/logistica/rest/requerimientomovimiento/agregarSolicitudAbastecimiento', {
+  // Al actualizar una plantilla importada Restaurant reutiliza el endpoint
+  // principal y recibe el ID de plantilla junto con el requerimiento.
+  if (plantillaId != null) {
+    requerimiento.actualizarPlantilla = '1';
+    requerimiento.plantillarequerimiento_id = String(plantillaId);
+  }
+
+  const endpoint = esSoloPlantilla
+    ? '/logistica/rest/requerimientomovimiento/agregarSoloComoPlantilla'
+    : '/logistica/rest/requerimientomovimiento/agregarSolicitudAbastecimiento';
+  const result = await apiPost(page, session.token, endpoint, {
     requerimiento,
     productos,
   });

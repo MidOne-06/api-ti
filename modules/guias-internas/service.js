@@ -62,6 +62,20 @@ export async function handleRequest(pathname, url, request, response) {
       const body = await readJsonBody(request);
       return json(response, 200, await withSession((page, session) => cancel(page, session, body)));
     }
+    if (pathname === '/api/agrupar' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => consolidate(page, session, body)));
+    }
+    if (pathname === '/api/exportar-excel' && request.method === 'GET') {
+      return withSession((page, session) => exportExcel(page, session, url, response));
+    }
+    if (pathname === '/api/exportar-excel-batch' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      return json(response, 200, await withSession((page, session) => exportExcelBatch(page, session, body)));
+    }
+    if (pathname === '/api/reportes-excel-batch' && request.method === 'GET') {
+      return json(response, 200, await withSession((page) => listExcelBatch(page)));
+    }
     if (pathname === '/api/reporte' && request.method === 'GET') {
       return withSession((page, session) => report(page, session, url, response));
     }
@@ -213,6 +227,14 @@ async function cancel(page, session, body) {
   return { ok: true, mensajes: result.mensajes ?? [], data: sanitizeRemoteData(result.data ?? {}) };
 }
 
+async function consolidate(page, session, body) {
+  const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)).filter((id) => /^\d+$/.test(id)) : [];
+  if (ids.length < 2) throw new Error('Selecciona al menos dos guías internas para agrupar.');
+
+  const result = await apiPost(page, session.token, '/logistica/rest/guiaremision/consolidarGuiaremsionList', ids);
+  return { ok: true, mensajes: result.mensajes ?? [], data: sanitizeRemoteData(result.data ?? {}) };
+}
+
 async function report(page, session, url, response) {
   const id = String(url.searchParams.get('id') ?? '').trim();
   const variant = String(url.searchParams.get('variant') ?? 'guia').trim();
@@ -263,6 +285,17 @@ function date(value, end = false) {
 }
 
 async function list(page, session, url) {
+  const payload = await guideListFilter(page, session, url);
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64');
+  const [result, header] = await Promise.all([
+    apiGet(page, session.token, `/logistica/rest/guiaremision/obtenerGuiaremisionLista/${encoded}?readonly=true&sobreEscribirRedis=0`),
+    apiGet(page, session.token, `/logistica/rest/guiaremision/obtenerCabeceraListaDeGuiasremision/${encoded}`),
+  ]);
+  const rows = Array.isArray(result.data) ? result.data : [];
+  return { filters: payload, header: sanitizeRemoteData(header.data ?? {}), total: Number(result.totalregistros ?? rows.length), rows: rows.map(mapRow) };
+}
+
+async function guideListFilter(page, session, url) {
   const locals = await fetchLocals(page, session);
   const allowed = new Set(locals.map((item) => String(item.id)));
   const requested = (url.searchParams.get('locales') ?? '').split(',').filter((id) => allowed.has(id));
@@ -276,13 +309,77 @@ async function list(page, session, url) {
     serie: url.searchParams.get('serie') ?? '', numero: url.searchParams.get('numero') ?? '', searchCodUnico: url.searchParams.get('codigo') ?? '',
     almacen: Number(url.searchParams.get('almacen') ?? -1), itemIdList: '', itemTipoList: '', filtroPorFecha: 1, cliente_id: -1,
   };
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64');
-  const [result, header] = await Promise.all([
-    apiGet(page, session.token, `/logistica/rest/guiaremision/obtenerGuiaremisionLista/${encoded}?readonly=true&sobreEscribirRedis=0`),
-    apiGet(page, session.token, `/logistica/rest/guiaremision/obtenerCabeceraListaDeGuiasremision/${encoded}`),
-  ]);
-  const rows = Array.isArray(result.data) ? result.data : [];
-  return { filters: payload, header: sanitizeRemoteData(header.data ?? {}), total: Number(result.totalregistros ?? rows.length), rows: rows.map(mapRow) };
+  return payload;
+}
+
+async function exportExcel(page, session, url, response) {
+  const payload = await guideListFilter(page, session, url);
+  const params = new URLSearchParams({
+    page: 'guiaremision_logistica_informeguiaremision',
+    name: 'Informe_guiaremision',
+    or: 'L',
+    parametros: Buffer.from(JSON.stringify(payload)).toString('base64'),
+    token: session.token,
+    type: 'excel',
+    detallado: '1',
+  });
+  const report = await fetchBinary(page, `${API_BASE}/api/reports/report.php?${params.toString()}`);
+  response.writeHead(200, {
+    'Content-Type': report.contentType,
+    'Content-Disposition': 'attachment; filename="Informe_guiaremision.xlsx"',
+    'Content-Length': report.buffer.length,
+  });
+  response.end(report.buffer);
+}
+
+async function exportExcelBatch(page, session, body) {
+  const url = new URL('http://gateway.local/api/exportar-excel-batch');
+  for (const [key, value] of Object.entries(body ?? {})) {
+    if (Array.isArray(value)) url.searchParams.set(key, value.join(','));
+    else if (value !== null && value !== undefined) url.searchParams.set(key, String(value));
+  }
+  const payload = await guideListFilter(page, session, url);
+  const hostname = new URL(API_BASE).hostname.split('.');
+  const subdominio = hostname.shift() ?? '';
+  const dominio = hostname.join('.');
+  const report = {
+    subdominio,
+    dominio,
+    clase: 'ReportVentasToBatch',
+    metodo: 'informeguiaremision',
+    params: { parametros: Buffer.from(JSON.stringify(payload)).toString('base64'), detallado: 1 },
+    nombreplantilla: null,
+    formatoExtension: 'xlsx',
+    nombrereporte: 'informeguiaremision',
+    batchobj: {
+      batch: '1', fecha_inicio: payload.fecha_inicio, fecha_fin: payload.fecha_fin, fecha: payload.fecha_inicio,
+      encode: '1', formato: 'xlsx', periodo: 7, consolidado: '0', nombrereporte: 'informeguiaremision',
+      iteradores: [], ordenarpor: [], camposvrituales: [],
+    },
+    token: session.token,
+  };
+  const result = await page.context().request.post('https://batch.restpe.com/api/crearproceso', { data: report });
+  if (!result.ok()) throw new Error(`Restaurant respondió HTTP ${result.status()} al generar el Excel BATCH.`);
+  const data = await result.json();
+  if (String(data.tipo) !== '1') throw new Error(data.mensajes?.[0] ?? data.message ?? 'Restaurant no pudo generar el Excel BATCH.');
+  return { ok: true, processId: String(data.data?._processID ?? ''), mensajes: data.mensajes ?? [] };
+}
+
+async function listExcelBatch(page) {
+  const hostname = new URL(API_BASE).hostname.split('.');
+  const subdominio = hostname.shift() ?? '';
+  const dominio = hostname.join('.');
+  const response = await page.context().request.get(`https://batch.restpe.com/api/listadopordominio/${encodeURIComponent(subdominio)}/${encodeURIComponent(dominio)}`);
+  if (!response.ok()) throw new Error(`Restaurant respondió HTTP ${response.status()} al consultar reportes BATCH.`);
+
+  const data = await response.json();
+  if (String(data.tipo) !== '1') throw new Error(data.mensajes?.[0] ?? data.message ?? 'Restaurant no pudo listar los reportes BATCH.');
+
+  const isGuideReport = (report) => String(report?.proceso_metodo ?? '') === 'informeguiaremision';
+  return {
+    pendientes: (Array.isArray(data.data?.pendientes) ? data.data.pendientes : []).filter(isGuideReport).map(sanitizeRemoteData),
+    terminados: (Array.isArray(data.data?.terminados) ? data.data.terminados : []).filter(isGuideReport).map(sanitizeRemoteData),
+  };
 }
 
 async function detail(page, session, id) {
