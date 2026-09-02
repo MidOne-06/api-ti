@@ -16,6 +16,7 @@ export async function handleRequest(pathname, url, request, response) {
       return json(response, 200, { almacenes: await withSession((page, session) => warehouses(page, session, localId)) });
     }
     if (pathname === '/api/motivos') return json(response, 200, { motivos: motivos() });
+    if (pathname === '/api/estados') return json(response, 200, { estados: estados() });
     if (pathname === '/api/recurrentes') {
       const localId = url.searchParams.get('local_id');
       if (!/^\d+$/.test(String(localId))) return json(response, 400, { error: 'Selecciona un local válido.' });
@@ -79,6 +80,7 @@ export async function handleRequest(pathname, url, request, response) {
     if (pathname === '/api/reporte' && request.method === 'GET') {
       return withSession((page, session) => report(page, session, url, response));
     }
+    if (pathname === '/api/contexto-filtros') return json(response, 200, await withSession((page, session) => guideFilterContext(page, session)));
     if (pathname === '/api/guias') return json(response, 200, await withSession((page, session) => list(page, session, url)));
     const match = pathname.match(/^\/api\/guias\/(\d+)$/);
     if (match) return json(response, 200, await withSession((page, session) => detail(page, session, match[1])));
@@ -93,6 +95,18 @@ function motivos() { return [
   { id: '6', name: 'Traslado entre establecimientos de la misma empresa' },
   { id: '9', name: 'Traslado por emisor itinerante de comprobantes de pago' },
   { id: '13', name: 'Otros' },
+]; }
+
+// Catálogo de `guiaremision_estado` que Logística presenta en Búsqueda
+// avanzada. Se entrega desde el gateway para que CRM y Restaurant conserven
+// una única fuente de integración para sus filtros.
+function estados() { return [
+  { id: '-1', name: 'Todos' },
+  { id: '1', name: 'Activa' },
+  { id: '2', name: 'Importada' },
+  { id: '0', name: 'Anulada' },
+  { id: '3', name: 'Agrupada' },
+  { id: '4', name: 'Sin Facturar' },
 ]; }
 
 async function localDetails(page, session) {
@@ -134,7 +148,7 @@ async function siguienteCorrelativo(page, session, serie) {
 
 async function items(page, session, query, localId) {
   const result = await apiPost(page, session.token, '/logistica/rest/common/busqueda/busquedaSensitivaSegunTipos', { busqueda: query, esInsumo: 1, esReceta: 1, esPorcionable: 1, esDescartable: 1, esModificador: 0, esCombo: 1, esProdTrans: 1, esProdNoTrans: 1, busqPorCodigo: 0, agruparInsumo: 1, esDerivado: 1, obtenerSoloPreentacionesDeVenta: 0, esProdContStock: 0, agruparProducto: 0, esConsumible: 1, local_id: String(localId), proveedor_id: -1, esActivo: 1, paraArqueo: -1 });
-  return (Array.isArray(result.data) ? result.data : []).slice(0, 30).map((item) => ({ ...sanitizeRemoteData(item), id: String(item.item_id ?? ''), codigo: item.item_codigo ?? '', descripcion: item.item_descripcion ?? '', presentacionId: String(item.presentacion_id ?? item.presentacioninsumo_id ?? item.item_presentacionid ?? ''), presentacion: item.presentacion_nombre ?? item.item_presentacion ?? '', unidad: item.unidadmedidainsumo ?? { unidadmedidainsumo_id: String(item.unidadmedidainsumo_id ?? 1), unidadmedidainsumo_descripcion: item.unidadmedida_descripcion ?? '' } }));
+  return (Array.isArray(result.data) ? result.data : []).slice(0, 30).map((item) => ({ ...sanitizeRemoteData(item), id: String(item.item_id ?? ''), item_tipo: String(item.item_tipo ?? ''), codigo: item.item_codigo ?? '', descripcion: item.item_descripcion ?? '', presentacionId: String(item.presentacion_id ?? item.presentacioninsumo_id ?? item.item_presentacionid ?? ''), presentacion: item.presentacion_nombre ?? item.item_presentacion ?? '', unidad: item.unidadmedidainsumo ?? { unidadmedidainsumo_id: String(item.unidadmedidainsumo_id ?? 1), unidadmedidainsumo_descripcion: item.unidadmedida_descripcion ?? '' } }));
 }
 
 async function motorizados(page, session, query) {
@@ -299,7 +313,8 @@ async function guideListFilter(page, session, url) {
   const locals = await fetchLocals(page, session);
   const allowed = new Set(locals.map((item) => String(item.id)));
   const requested = (url.searchParams.get('locales') ?? '').split(',').filter((id) => allowed.has(id));
-  const selected = requested.length ? requested : [...allowed];
+  const sessionLocalId = String(session.localId ?? '');
+  const selected = requested.length ? requested : (allowed.has(sessionLocalId) ? [sessionLocalId] : [...allowed]);
   const today = new Date().toISOString().slice(0, 10);
   const payload = {
     pagina: Math.max(1, Number(url.searchParams.get('pagina') ?? 1)), tipolista: '2', locales: selected.join('-'),
@@ -307,9 +322,20 @@ async function guideListFilter(page, session, url) {
     local_id: String(session.localId ?? selected[0] ?? ''), fecha_inicio: date(url.searchParams.get('fecha_inicio') ?? today) ?? `${today} 00:00:00`,
     fecha_fin: date(url.searchParams.get('fecha_fin') ?? today, true) ?? `${today} 23:59:59`, registros: Math.min(100, Math.max(10, Number(url.searchParams.get('registros') ?? 50))),
     serie: url.searchParams.get('serie') ?? '', numero: url.searchParams.get('numero') ?? '', searchCodUnico: url.searchParams.get('codigo') ?? '',
-    almacen: Number(url.searchParams.get('almacen') ?? -1), itemIdList: '', itemTipoList: '', filtroPorFecha: 1, cliente_id: -1,
+    almacen: Number(url.searchParams.get('almacen') ?? -1),
+    itemIdList: url.searchParams.get('item_ids') ?? '',
+    itemTipoList: url.searchParams.get('item_tipos') ?? '',
+    filtroPorFecha: Number(url.searchParams.get('filtro_por_fecha') ?? 1) === 0 ? 0 : 1,
+    cliente_id: -1,
   };
   return payload;
+}
+
+async function guideFilterContext(page, session) {
+  const localId = String(session.localId ?? '');
+  const locals = await fetchLocals(page, session);
+  const local = locals.find((item) => String(item.id) === localId);
+  return { local_id: localId, local_nombre: String(local?.name ?? '') };
 }
 
 async function exportExcel(page, session, url, response) {
