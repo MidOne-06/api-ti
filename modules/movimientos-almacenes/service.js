@@ -243,7 +243,6 @@ function selectedWarehouse(catalog, requestedId, fallback, label) {
 function mergeEditableItems(rows, inputItems) {
   if (!Array.isArray(inputItems)) return rows;
   const existing = new Map(rows.map((row) => [String(row.detallemovimiento_id ?? row.id ?? ''), row]));
-  const seen = new Set();
   const merged = [];
 
   for (const input of inputItems) {
@@ -254,7 +253,6 @@ function mergeEditableItems(rows, inputItems) {
 
     if (id && existing.has(id)) {
       const row = existing.get(id);
-      seen.add(id);
       merged.push({ ...row, item_cantidad: quantity, detallemovimiento_cantidad: quantity });
       continue;
     }
@@ -278,9 +276,7 @@ function mergeEditableItems(rows, inputItems) {
     });
   }
 
-  // The CRM intentionally does not expose deletion in this edit flow. Keep
-  // any existing detail that was not dehydrated as a safe compatibility path.
-  for (const [id, row] of existing) if (!seen.has(id) && id) merged.push(row);
+  if (!merged.length) throw new Error('El movimiento debe conservar al menos un ítem.');
   return merged;
 }
 
