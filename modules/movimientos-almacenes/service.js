@@ -25,6 +25,9 @@ export async function handleRequest(pathname, url, request, response) {
       if (!/^\d+$/.test(localId)) return json(response, 400, { error: 'Selecciona un local válido.' });
       return json(response, 200, { almacenes: await withSession((page, session) => warehouses(page, session, localId)) });
     }
+    if (pathname === '/api/almacenes-todos') {
+      return json(response, 200, { almacenes: await withSession(allWarehouses) });
+    }
     if (pathname === '/api/items') {
       const query = String(url.searchParams.get('q') ?? '').trim();
       const localId = String(url.searchParams.get('local_id') ?? '');
@@ -52,6 +55,37 @@ async function warehouses(page, session, localId) {
   return (Array.isArray(result.data) ? result.data : [])
     .map((row) => ({ id: String(row.almacen_id ?? ''), name: String(row.almacen_descripcion ?? '') }))
     .filter((row) => row.id && row.name);
+}
+
+// Mismo tráfico que el editor de Movimiento entre almacenes de Logística:
+// CommonCollection.obtenerAlmacenListPorLocal(TODOS, ACTIVO, INACTIVO,
+// INACTIVO). Se filtra luego con los locales permitidos que Restaurant entrega
+// a la sesión; no se consulta ni persiste catálogo local.
+async function allWarehouses(page, session) {
+  const [result, locals] = await Promise.all([
+    apiGet(page, session.token, '/logistica/rest/common/almacen/getAll/-1/1/0/0'),
+    fetchLocals(page, session),
+  ]);
+  const allowed = new Set(locals.map((local) => String(local.id)));
+  return (Array.isArray(result.data) ? result.data : [])
+    .filter((row) => allowed.has(String(row.local_id ?? row.local?.local_id ?? '')))
+    .map((row) => ({
+      id: String(row.almacen_id ?? ''),
+      name: String(row.almacen_descripcion ?? ''),
+      localId: String(row.local_id ?? row.local?.local_id ?? ''),
+      localName: String(row.local?.local_descripcion ?? row.local_descripcion ?? ''),
+    }))
+    .filter((row) => row.id && row.name && row.localId);
+}
+
+async function allWarehouseObjects(page, session) {
+  const [result, locals] = await Promise.all([
+    apiGet(page, session.token, '/logistica/rest/common/almacen/getAll/-1/1/0/0'),
+    fetchLocals(page, session),
+  ]);
+  const allowed = new Set(locals.map((local) => String(local.id)));
+  return (Array.isArray(result.data) ? result.data : [])
+    .filter((row) => allowed.has(String(row.local_id ?? row.local?.local_id ?? '')));
 }
 
 async function items(page, session, query, localId) {
@@ -165,6 +199,11 @@ async function edit(page, session, id, input) {
   const detailRows = Array.isArray(source.productos) ? source.productos : [];
   if (!detailRows.length) throw new Error('Restaurant no devolvió ítems para editar este movimiento.');
   const editableItems = mergeEditableItems(detailRows, input.items);
+  const warehouseCatalog = await allWarehouseObjects(page, session);
+  const currentOrigin = detailRows[0].almacen ?? movement.almacenOrigen ?? null;
+  const currentDestination = detailRows[0].almacenTarget ?? movement.almacenDestino ?? null;
+  const origin = selectedWarehouse(warehouseCatalog, input.almacen_origen, currentOrigin, 'origen');
+  const destination = selectedWarehouse(warehouseCatalog, input.almacen_destino, currentDestination, 'destino');
   const next = {
     ...movement,
     movimiento_fecha: String(input.fecha ?? movement.movimiento_fecha ?? ''),
@@ -173,9 +212,10 @@ async function edit(page, session, id, input) {
     movimiento_observacion: String(input.observacion ?? movement.movimiento_observacion ?? ''),
     // Estas propiedades transitorias son las que construye la ruta nativa
     // /movimientoalmacen/editar/{id} antes de actualizarMovimiento.
-    localSeleccionado: movement.local ?? null,
-    almacenOrigenSeleccionado: detailRows[0].almacen ?? movement.almacenOrigen ?? null,
-    almacenDestinoSeleccionado: detailRows[0].almacenTarget ?? movement.almacenDestino ?? null,
+    local_id: String(origin.local_id ?? origin.local?.local_id ?? movement.local_id ?? ''),
+    localSeleccionado: origin.local ?? movement.local ?? null,
+    almacenOrigenSeleccionado: origin,
+    almacenDestinoSeleccionado: destination,
   };
   const products = formatDetailsForRestaurant(editableItems, next);
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
@@ -184,6 +224,13 @@ async function edit(page, session, id, input) {
     emulacionMovimiento: [],
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+function selectedWarehouse(catalog, requestedId, fallback, label) {
+  const id = String(requestedId ?? fallback?.almacen_id ?? '');
+  const selected = catalog.find((warehouse) => String(warehouse.almacen_id) === id);
+  if (!selected) throw new Error(`El almacén de ${label} ya no está disponible para tu sesión en Restaurant.`);
+  return selected;
 }
 
 function mergeEditableItems(rows, inputItems) {
