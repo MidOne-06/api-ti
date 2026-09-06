@@ -94,14 +94,20 @@ async function detail(page, session, id) {
   const source = await fetchMovement(page, session, id);
   const movement = source.movimiento ?? source;
   const products = Array.isArray(source.productos) ? source.productos : [];
+  // obtenerMovimiento devuelve los almacenes y locales vinculados con nombres
+  // distintos a los de la grilla. El editor nativo de Restaurant toma estos
+  // objetos (no la fila resumida) para hidratar su pantalla.
+  const origin = movement.almacenOrigen ?? products[0]?.almacen ?? movement.almacen ?? null;
+  const destination = movement.almacenDestino ?? products[0]?.almacenTarget ?? movement.almacenTarget ?? null;
+  const destinationLocal = movement.localDestino ?? movement.localTarget ?? null;
 
   return {
     id: String(movement.movimiento_id ?? id),
     fecha: movement.movimiento_fecha ?? '',
     localOrigen: String(movement.local?.local_descripcion ?? movement.local_descripcion ?? ''),
-    almacenOrigen: String(movement.almacen?.almacen_descripcion ?? movement.almacen_descripcion ?? ''),
-    localDestino: String(movement.localTarget?.local_descripcion ?? movement.localdestino_descripcion ?? ''),
-    almacenDestino: String(movement.almacenTarget?.almacen_descripcion ?? movement.almacen_destino_descripcion ?? ''),
+    almacenOrigen: String(origin?.almacen_descripcion ?? movement.almacen_descripcion ?? ''),
+    localDestino: String(destinationLocal?.local_descripcion ?? movement.localdestino_descripcion ?? ''),
+    almacenDestino: String(destination?.almacen_descripcion ?? movement.almacen_destino_descripcion ?? ''),
     encargado: String(movement.movimiento_encargado ?? ''),
     receptor: String(movement.movimiento_receptor ?? ''),
     registradoPor: String(movement.usuario_nombrescompletos ?? movement.usuario?.usuario_nick ?? ''),
@@ -116,6 +122,18 @@ async function detail(page, session, id) {
     requerimientos: mapLinked(movement.requerimientomovimientoList ?? movement.requerimientoMovimientoList),
     ordenes: mapLinked(movement.solitudmovimientoList ?? movement.ordenmovimientoList),
     mermas: mapLinked(movement.mermaList),
+    // Contrato específico del editor. No se expone el objeto crudo de
+    // Restaurant: se conserva únicamente lo que la pantalla necesita y lo
+    // que puede reenviarse al endpoint actualizarMovimiento.
+    editor: {
+      local: String(movement.local?.local_descripcion ?? movement.local_descripcion ?? ''),
+      localId: String(movement.local_id ?? movement.local?.local_id ?? ''),
+      tipo: movementTypeLabel(movement.movimiento_tipomovimiento),
+      tipoCodigo: String(movement.movimiento_tipomovimiento ?? ''),
+      almacenOrigen: { id: String(origin?.almacen_id ?? ''), nombre: String(origin?.almacen_descripcion ?? '') },
+      almacenDestino: { id: String(destination?.almacen_id ?? ''), nombre: String(destination?.almacen_descripcion ?? '') },
+      items: products.map(mapEditorItem),
+    },
   };
 }
 
@@ -146,6 +164,7 @@ async function edit(page, session, id, input) {
   if (String(movement.movimiento_estado ?? '') !== '1') throw new Error('Solo se pueden editar movimientos activos.');
   const detailRows = Array.isArray(source.productos) ? source.productos : [];
   if (!detailRows.length) throw new Error('Restaurant no devolvió ítems para editar este movimiento.');
+  const editableItems = mergeEditableItems(detailRows, input.items);
   const next = {
     ...movement,
     movimiento_fecha: String(input.fecha ?? movement.movimiento_fecha ?? ''),
@@ -155,16 +174,31 @@ async function edit(page, session, id, input) {
     // Estas propiedades transitorias son las que construye la ruta nativa
     // /movimientoalmacen/editar/{id} antes de actualizarMovimiento.
     localSeleccionado: movement.local ?? null,
-    almacenOrigenSeleccionado: detailRows[0].almacen ?? null,
-    almacenDestinoSeleccionado: detailRows[0].almacenTarget ?? null,
+    almacenOrigenSeleccionado: detailRows[0].almacen ?? movement.almacenOrigen ?? null,
+    almacenDestinoSeleccionado: detailRows[0].almacenTarget ?? movement.almacenDestino ?? null,
   };
-  const products = formatDetailsForRestaurant(detailRows, next);
+  const products = formatDetailsForRestaurant(editableItems, next);
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
     movimiento: next,
     productos,
     emulacionMovimiento: [],
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+function mergeEditableItems(rows, inputItems) {
+  if (!Array.isArray(inputItems)) return rows;
+  const updates = new Map(inputItems
+    .filter((row) => row && String(row.id ?? '').length)
+    .map((row) => [String(row.id), row]));
+
+  return rows.map((row) => {
+    const update = updates.get(String(row.detallemovimiento_id ?? row.id ?? ''));
+    if (!update) return row;
+    const quantity = Number(update.cantidad);
+    if (!Number.isFinite(quantity) || quantity < 0) throw new Error('Cada ítem debe tener una cantidad válida.');
+    return { ...row, item_cantidad: quantity, detallemovimiento_cantidad: quantity };
+  });
 }
 
 // Réplica acotada de Movimiento.obtenerFormatoDetalleMovimientoBackend() del
@@ -237,6 +271,21 @@ function mapDetailItem(item) {
     almacenDestino: String(item.almacenTarget?.almacen_descripcion ?? item.almacen_destino_descripcion ?? ''),
     valorizado: Number(item.valorizado ?? item.item_valorizado ?? 0),
   };
+}
+
+function mapEditorItem(item) {
+  return {
+    id: String(item.detallemovimiento_id ?? item.id ?? ''),
+    codigo: String(item.item_codigo ?? ''),
+    descripcion: String(item.item_descripcion ?? item.descripcion ?? ''),
+    presentacion: String(item.presentacion_nombre ?? item.item_presentacion ?? ''),
+    cantidad: Number(item.item_cantidad ?? item.detallemovimiento_cantidad ?? 0),
+    unidad: String(item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
+  };
+}
+
+function movementTypeLabel(value) {
+  return String(value) === '1' ? 'TRASLADO' : (String(value || 'Sin especificar'));
 }
 
 function mapLinked(rows) {
