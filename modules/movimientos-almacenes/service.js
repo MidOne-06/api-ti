@@ -105,7 +105,7 @@ async function items(page, session, query, localId) {
       presentacion_id: String(item.presentacion_id ?? item.presentacioninsumo_id ?? item.presentacioncompraproducto_id ?? item.item_presentacionid ?? ''),
       unidadmedida_id: String(item.unidadmedidainsumo_id ?? unit.unidadmedidainsumo_id ?? item.unidadmedida_id ?? ''),
       presentacion_cantidad: item.presentacioninsumo_cantidad ?? item.presentacion_cantidad ?? item.item_presentacioncantidad ?? null,
-      unidad: String(unit.unidadmedidainsumo_descripcion ?? item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
+      unidad: String(item.unidadmedidainsumo_descripcion ?? unit.unidadmedidainsumo_descripcion ?? item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
     };
   }).filter((item) => item.id && item.item_tipo && item.descripcion);
 }
