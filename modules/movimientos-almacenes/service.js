@@ -97,10 +97,17 @@ async function items(page, session, query, localId) {
     proveedor_id: -1, esActivo: 1, paraArqueo: -1,
   });
 
-  return (Array.isArray(result.data) ? result.data : []).slice(0, 30).map((item) => ({
-    id: String(item.item_id ?? ''), item_tipo: String(item.item_tipo ?? ''), codigo: String(item.item_codigo ?? ''),
-    descripcion: String(item.item_descripcion ?? ''), presentacion: String(item.presentacion_nombre ?? item.item_presentacion ?? ''),
-  })).filter((item) => item.id && item.item_tipo && item.descripcion);
+  return (Array.isArray(result.data) ? result.data : []).slice(0, 30).map((item) => {
+    const unit = item.unidadmedidainsumo ?? {};
+    return {
+      id: String(item.item_id ?? ''), item_tipo: String(item.item_tipo ?? ''), codigo: String(item.item_codigo ?? ''),
+      descripcion: String(item.item_descripcion ?? ''), presentacion: String(item.presentacion_nombre ?? item.item_presentacion ?? ''),
+      presentacion_id: String(item.presentacion_id ?? item.presentacioninsumo_id ?? item.presentacioncompraproducto_id ?? item.item_presentacionid ?? ''),
+      unidadmedida_id: String(item.unidadmedidainsumo_id ?? unit.unidadmedidainsumo_id ?? item.unidadmedida_id ?? ''),
+      presentacion_cantidad: item.presentacioninsumo_cantidad ?? item.presentacion_cantidad ?? item.item_presentacioncantidad ?? null,
+      unidad: String(unit.unidadmedidainsumo_descripcion ?? item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
+    };
+  }).filter((item) => item.id && item.item_tipo && item.descripcion);
 }
 
 async function list(page, session, url) {
@@ -235,17 +242,46 @@ function selectedWarehouse(catalog, requestedId, fallback, label) {
 
 function mergeEditableItems(rows, inputItems) {
   if (!Array.isArray(inputItems)) return rows;
-  const updates = new Map(inputItems
-    .filter((row) => row && String(row.id ?? '').length)
-    .map((row) => [String(row.id), row]));
+  const existing = new Map(rows.map((row) => [String(row.detallemovimiento_id ?? row.id ?? ''), row]));
+  const seen = new Set();
+  const merged = [];
 
-  return rows.map((row) => {
-    const update = updates.get(String(row.detallemovimiento_id ?? row.id ?? ''));
-    if (!update) return row;
-    const quantity = Number(update.cantidad);
+  for (const input of inputItems) {
+    if (!input || typeof input !== 'object') continue;
+    const id = String(input.id ?? '');
+    const quantity = Number(input.cantidad_a_mover ?? input.cantidad);
     if (!Number.isFinite(quantity) || quantity < 0) throw new Error('Cada ítem debe tener una cantidad válida.');
-    return { ...row, item_cantidad: quantity, detallemovimiento_cantidad: quantity };
-  });
+
+    if (id && existing.has(id)) {
+      const row = existing.get(id);
+      seen.add(id);
+      merged.push({ ...row, item_cantidad: quantity, detallemovimiento_cantidad: quantity });
+      continue;
+    }
+
+    const itemId = String(input.item_id ?? '');
+    const itemType = Number(input.item_tipo ?? 0);
+    if (!itemId || !Number.isFinite(itemType) || itemType <= 0) throw new Error('Selecciona un ítem válido para cada nueva fila.');
+    merged.push({
+      item_id: itemId,
+      item_tipo: itemType,
+      item_codigo: String(input.codigo ?? ''),
+      item_descripcion: String(input.descripcion ?? ''),
+      presentacion_id: input.presentacion_id ?? null,
+      presentacion_nombre: String(input.presentacion ?? ''),
+      unidadmedidainsumo_id: input.unidadmedida_id ?? null,
+      unidadmedida_descripcion: String(input.unidad ?? ''),
+      presentacioninsumo_cantidad: input.presentacion_cantidad ?? null,
+      item_cantidad: quantity,
+      item_cantidad_original: quantity,
+      detallemovimiento_id: null,
+    });
+  }
+
+  // The CRM intentionally does not expose deletion in this edit flow. Keep
+  // any existing detail that was not dehydrated as a safe compatibility path.
+  for (const [id, row] of existing) if (!seen.has(id) && id) merged.push(row);
+  return merged;
 }
 
 // Réplica acotada de Movimiento.obtenerFormatoDetalleMovimientoBackend() del
@@ -323,11 +359,16 @@ function mapDetailItem(item) {
 function mapEditorItem(item) {
   return {
     id: String(item.detallemovimiento_id ?? item.id ?? ''),
+    itemId: String(item.item_id ?? item.producto_id ?? item.insumo_id ?? ''),
+    itemTipo: String(item.item_tipo ?? item.tipo ?? ''),
     codigo: String(item.item_codigo ?? ''),
     descripcion: String(item.item_descripcion ?? item.descripcion ?? ''),
     presentacion: String(item.presentacion_nombre ?? item.item_presentacion ?? ''),
+    presentacionId: String(item.presentacion_id ?? item.presentacioninsumo_id ?? item.presentacioncompraproducto_id ?? item.item_presentacionid ?? ''),
+    unidadmedidaId: String(item.unidadmedidainsumo_id ?? item.unidadmedidainsumo?.unidadmedidainsumo_id ?? item.unidadmedida_id ?? ''),
+    presentacionCantidad: item.presentacioninsumo_cantidad ?? item.presentacion_cantidad ?? item.item_presentacioncantidad ?? null,
     cantidad: Number(item.item_cantidad ?? item.detallemovimiento_cantidad ?? 0),
-    unidad: String(item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
+    unidad: String(item.unidadmedidainsumo?.unidadmedidainsumo_descripcion ?? item.unidadmedida_descripcion ?? item.item_unidadmedida ?? ''),
   };
 }
 
