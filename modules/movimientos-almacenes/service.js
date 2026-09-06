@@ -1,4 +1,4 @@
-import { json, serveStatic } from '../../lib/http.js';
+import { json, readJsonBody, serveStatic } from '../../lib/http.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apiGet, apiPost, fetchBinary, fetchLocals, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
@@ -36,6 +36,8 @@ export async function handleRequest(pathname, url, request, response) {
     if (detailMatch) return json(response, 200, await withSession((page, session) => detail(page, session, detailMatch[1])));
     const cancelMatch = pathname.match(/^\/api\/movimientos\/(\d+)\/anular$/);
     if (cancelMatch && request.method === 'POST') return json(response, 200, await withSession((page, session) => cancel(page, session, cancelMatch[1])));
+    const editMatch = pathname.match(/^\/api\/movimientos\/(\d+)\/editar$/);
+    if (editMatch && request.method === 'POST') return json(response, 200, await withSession(async (page, session) => edit(page, session, editMatch[1], await readJsonBody(request))));
     if (pathname === '/api/reporte') return withSession((page, session) => report(page, session, url, response));
 
     return json(response, 404, { error: 'No encontrado.' });
@@ -129,6 +131,28 @@ async function cancel(page, session, id) {
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/anularMovimmiento', {
     movimiento: movement,
     productos,
+  });
+  return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+// Restaurant requiere el objeto completo. Por eso la edición parte siempre de
+// una lectura nueva y sólo reemplaza los campos modificables del formulario.
+async function edit(page, session, id, input) {
+  const source = await fetchMovement(page, session, id);
+  const movement = source.movimiento ?? source;
+  if (String(movement.movimiento_estado ?? '') !== '1') throw new Error('Solo se pueden editar movimientos activos.');
+  const products = Array.isArray(source.productos) ? source.productos : (movement.listProductos ?? []);
+  const next = {
+    ...movement,
+    movimiento_fecha: String(input.fecha ?? movement.movimiento_fecha ?? ''),
+    movimiento_encargado: String(input.encargado ?? movement.movimiento_encargado ?? ''),
+    movimiento_receptor: String(input.receptor ?? movement.movimiento_receptor ?? ''),
+    movimiento_observacion: String(input.observacion ?? movement.movimiento_observacion ?? ''),
+  };
+  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
+    movimiento: next,
+    productos,
+    emulacionMovimiento: [],
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
 }

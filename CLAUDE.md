@@ -56,3 +56,4 @@ corregir un error real.
 
 - 2026-09-03 · Claude Code · Guías internas: nuevos endpoints `/api/estados` y `/api/contexto-filtros`; `items()` devuelve `item_tipo`; `guideListFilter` conecta `itemIdList`/`itemTipoList`/`filtroPorFecha` a los valores reales de la solicitud en vez de dejarlos vacíos/fijos. · Ninguno.
 - 2026-09-06 · Codex · Movimientos entre almacenes: gateway en tiempo real contra los endpoints nativos `movimiento/obtenerListaDeMovimientos` y `obtenerCabeceraListaDeMovimientos`; no persiste movimientos en la base local. · Pendiente validar visualmente el módulo CRM publicado.
+- 2026-09-06 · Codex · Movimientos entre almacenes: endpoint protegido `POST /api/movimientos/{id}/editar` mapeado a `movimiento/actualizarMovimiento`; relee el movimiento y conserva los detalles remotos antes de aplicar los campos cabecera del formulario nativo. · No ejecutar POST sobre movimientos operativos sin autorización explícita para modificar ese registro.
