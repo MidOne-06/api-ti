@@ -1,7 +1,7 @@
 import { json, serveStatic } from '../../lib/http.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { apiGet, apiPost, fetchLocals, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
+import { apiGet, apiPost, fetchBinary, fetchLocals, withSession } from '../../lib/restaurant-session.js';
 
 export const prefix = '/movimientos-almacenes';
 export const publicDir = join(dirname(fileURLToPath(import.meta.url)), 'public');
@@ -34,6 +34,9 @@ export async function handleRequest(pathname, url, request, response) {
     if (pathname === '/api/movimientos') return json(response, 200, await withSession((page, session) => list(page, session, url)));
     const detailMatch = pathname.match(/^\/api\/movimientos\/(\d+)$/);
     if (detailMatch) return json(response, 200, await withSession((page, session) => detail(page, session, detailMatch[1])));
+    const cancelMatch = pathname.match(/^\/api\/movimientos\/(\d+)\/anular$/);
+    if (cancelMatch && request.method === 'POST') return json(response, 200, await withSession((page, session) => cancel(page, session, cancelMatch[1])));
+    if (pathname === '/api/reporte') return withSession((page, session) => report(page, session, url, response));
 
     return json(response, 404, { error: 'No encontrado.' });
   } catch (error) {
@@ -86,8 +89,7 @@ async function list(page, session, url) {
  * la lista porque esa respuesta no contiene los ítems ni los vínculos.
  */
 async function detail(page, session, id) {
-  const result = await apiGet(page, session.token, `/logistica/rest/movimiento/obtenerMovimiento/${id}`);
-  const source = result.data ?? {};
+  const source = await fetchMovement(page, session, id);
   const movement = source.movimiento ?? source;
   const products = Array.isArray(source.productos) ? source.productos : [];
 
@@ -113,6 +115,33 @@ async function detail(page, session, id) {
     ordenes: mapLinked(movement.solitudmovimientoList ?? movement.ordenmovimientoList),
     mermas: mapLinked(movement.mermaList),
   };
+}
+
+async function fetchMovement(page, session, id) {
+  const result = await apiGet(page, session.token, `/logistica/rest/movimiento/obtenerMovimiento/${id}`);
+  return result.data ?? {};
+}
+
+async function cancel(page, session, id) {
+  const source = await fetchMovement(page, session, id);
+  const movement = source.movimiento ?? source;
+  const products = Array.isArray(source.productos) ? source.productos : (movement.listProductos ?? []);
+  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/anularMovimmiento', {
+    movimiento: movement,
+    productos,
+  });
+  return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+async function report(page, session, url, response) {
+  const id = String(url.searchParams.get('id') ?? '');
+  const variant = String(url.searchParams.get('variant') ?? 'normal');
+  if (!/^\d+$/.test(id) || !['normal', 'sin_costos'].includes(variant)) return json(response, 400, { error: 'Reporte no válido.' });
+  const query = new URLSearchParams({ page: 'detalleindividual_logistica_movimientointernoPDF', or: 'P', type: 'pdf', margen: '10', footer: '1', movimiento_id: id, name: `movimiento${id}`, token: session.token });
+  if (variant === 'sin_costos') query.set('ocultarcostos', '1');
+  const file = await fetchBinary(page, `https://img.restpe.com/api/reports/report.php?${query}`);
+  response.writeHead(200, { 'Content-Type': file.contentType, 'Content-Disposition': `attachment; filename="movimiento-${id}${variant === 'sin_costos' ? '-sin-costos' : ''}.pdf"` });
+  response.end(file.buffer);
 }
 
 function mapDetailItem(item) {
