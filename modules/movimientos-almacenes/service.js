@@ -1,7 +1,7 @@
 import { json, serveStatic } from '../../lib/http.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { apiGet, apiPost, fetchBinary, fetchLocals, withSession } from '../../lib/restaurant-session.js';
+import { apiGet, apiPost, fetchBinary, fetchLocals, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
 
 export const prefix = '/movimientos-almacenes';
 export const publicDir = join(dirname(fileURLToPath(import.meta.url)), 'public');
