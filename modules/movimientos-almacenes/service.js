@@ -127,7 +127,10 @@ async function fetchMovement(page, session, id) {
 async function cancel(page, session, id) {
   const source = await fetchMovement(page, session, id);
   const movement = source.movimiento ?? source;
-  const products = Array.isArray(source.productos) ? source.productos : (movement.listProductos ?? []);
+  // El listado de Restaurant (la misma acción que usa el ERP) envía la
+  // propiedad listProductos de la fila, no el detalle hidratado. Mezclarlos
+  // provoca que el backend remoto no resuelva su variable "productos".
+  const products = Array.isArray(movement.listProductos) ? movement.listProductos : [];
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/anularMovimmiento', {
     movimiento: movement,
     productos,
@@ -141,20 +144,74 @@ async function edit(page, session, id, input) {
   const source = await fetchMovement(page, session, id);
   const movement = source.movimiento ?? source;
   if (String(movement.movimiento_estado ?? '') !== '1') throw new Error('Solo se pueden editar movimientos activos.');
-  const products = Array.isArray(source.productos) ? source.productos : (movement.listProductos ?? []);
+  const detailRows = Array.isArray(source.productos) ? source.productos : [];
+  if (!detailRows.length) throw new Error('Restaurant no devolvió ítems para editar este movimiento.');
   const next = {
     ...movement,
     movimiento_fecha: String(input.fecha ?? movement.movimiento_fecha ?? ''),
     movimiento_encargado: String(input.encargado ?? movement.movimiento_encargado ?? ''),
     movimiento_receptor: String(input.receptor ?? movement.movimiento_receptor ?? ''),
     movimiento_observacion: String(input.observacion ?? movement.movimiento_observacion ?? ''),
+    // Estas propiedades transitorias son las que construye la ruta nativa
+    // /movimientoalmacen/editar/{id} antes de actualizarMovimiento.
+    localSeleccionado: movement.local ?? null,
+    almacenOrigenSeleccionado: detailRows[0].almacen ?? null,
+    almacenDestinoSeleccionado: detailRows[0].almacenTarget ?? null,
   };
+  const products = formatDetailsForRestaurant(detailRows, next);
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
     movimiento: next,
     productos,
     emulacionMovimiento: [],
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+// Réplica acotada de Movimiento.obtenerFormatoDetalleMovimientoBackend() del
+// frontend de Logística. El endpoint no admite los objetos de detalle tal como
+// los entrega obtenerMovimiento: requiere estas claves de persistencia.
+function formatDetailsForRestaurant(rows, movement) {
+  const origin = movement.almacenOrigenSeleccionado;
+  const destination = movement.almacenDestinoSeleccionado;
+  if (!origin?.almacen_id || !destination?.almacen_id) throw new Error('Restaurant no devolvió los almacenes del movimiento.');
+
+  return rows
+    .filter((row) => Number(row.item_cantidad ?? row.detallemovimiento_cantidad ?? 0) >= 0)
+    .map((row) => {
+      const itemType = Number(row.item_tipo ?? row.tipo ?? 0);
+      const itemId = String(row.item_id ?? '');
+      const detail = {
+        detallemovimiento_descripcion: row.item_descripcion ?? row.detallemovimiento_descripcion ?? '',
+        detallemovimiento_unidadmedida: row.unidadmedidainsumo ?? row.unidadmedida_descripcion ?? '',
+        detallemovimiento_cantidad: Number(row.item_cantidad ?? row.detallemovimiento_cantidad ?? 0),
+        detallemovimiento_cantidadsolicitada: row.item_cantidad_original ?? row.detallemovimiento_cantidadsolicitada ?? null,
+        movimiento_id: String(movement.movimiento_id ?? '-1'),
+        detallemovimiento_id: row.detallemovimiento_id ?? null,
+        tipo: itemType,
+        unidadmedidainsumo: row.unidadmedidainsumo_id ?? null,
+        almacenSeleccionado: origin,
+        almacen_id: String(origin.almacen_id),
+        detallemovimiento_almacendestinoid: String(destination.almacen_id),
+        detallemovimiento_almacenorigenid: String(origin.almacen_id),
+        detallemovimiento_observacion: row.item_observacion || null,
+      };
+      if (itemType === 2) {
+        detail.producto_id = itemId;
+        detail.insumo_id = null;
+        detail.producto_codigo = itemId;
+        if (Number(row.presentacion_id ?? 0) > 0) {
+          detail.presentacioncompraproducto_id = row.presentacion_id;
+          detail.detallemovimiento_descripcion = `${detail.detallemovimiento_descripcion} - ${row.presentacion_nombre ?? ''}`.trim();
+        }
+      } else {
+        detail.insumo_id = itemId;
+        detail.producto_id = null;
+        detail.producto_codigo = row.item_codigo ?? '';
+        detail.presentacioninsumo_id = row.presentacion_id ?? null;
+        detail.presentacioninsumo_cantidad = row.presentacioninsumo_cantidad ?? row.presentacion_cantidad ?? null;
+      }
+      return detail;
+    });
 }
 
 async function report(page, session, url, response) {
