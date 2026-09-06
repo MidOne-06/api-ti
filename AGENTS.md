@@ -8,7 +8,7 @@
 Gateway Node.js/Playwright que expone la integración real contra
 Restaurant.pe (sesiones de navegador autenticadas, no una API pública)
 para el panel CRM DIMSUM. Repo remoto: `https://github.com/MidOne-06/api-ti.git`
-(rama `main`). Producción: `2.25.104.73`, contenedor `crm-dimsum-gateway-1`
+(rama `main`). Producción: `2.25.155.29` (acceso autorizado mediante el puente `2.25.104.73`), contenedor `crm-dimsum-gateway-1`
 (proyecto Docker Compose `crm-dimsum`), deploy en `/opt/API-TI`, build
 requiere `STOCK_GATEWAY_PATH=/opt/API-TI` explícito. Consumido por el
 panel Laravel `crm_dimsum` (`D:\DS-TI\CRM-DIMSUM\opm-digemid`).
@@ -55,3 +55,4 @@ Agregar entradas nuevas al final. No editar entradas viejas salvo para
 corregir un error real.
 
 - 2026-09-03 · Claude Code · Guías internas: nuevos endpoints `/api/estados` y `/api/contexto-filtros`; `items()` devuelve `item_tipo`; `guideListFilter` conecta `itemIdList`/`itemTipoList`/`filtroPorFecha` a los valores reales de la solicitud en vez de dejarlos vacíos/fijos. · Ninguno.
+- 2026-09-06 · Codex · Movimientos entre almacenes: gateway en tiempo real contra los endpoints nativos `movimiento/obtenerListaDeMovimientos` y `obtenerCabeceraListaDeMovimientos`; no persiste movimientos en la base local. · Pendiente validar visualmente el módulo CRM publicado.
