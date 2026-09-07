@@ -236,6 +236,11 @@ async function edit(page, session, id, input) {
   if (!detailRows.length) throw new Error('Restaurant no devolvió ítems para editar este movimiento.');
   const editableItems = mergeEditableItems(detailRows, input.items);
   const warehouseCatalog = await allWarehouseObjects(page, session);
+  const types = await movementTypes(page, session);
+  const movementType = String(input.tipo_movimiento ?? movement.movimiento_tipomovimiento ?? '');
+  if (!types.some((type) => String(type.id) === movementType)) {
+    throw new Error('Selecciona un tipo de movimiento vigente en Restaurant.');
+  }
   const currentOrigin = detailRows[0].almacen ?? movement.almacenOrigen ?? null;
   const currentDestination = detailRows[0].almacenTarget ?? movement.almacenDestino ?? null;
   const origin = selectedWarehouse(warehouseCatalog, input.almacen_origen, currentOrigin, 'origen');
@@ -249,6 +254,8 @@ async function edit(page, session, id, input) {
     movimiento_encargado: String(input.encargado ?? movement.movimiento_encargado ?? ''),
     movimiento_receptor: String(input.receptor ?? movement.movimiento_receptor ?? ''),
     movimiento_observacion: String(input.observacion ?? movement.movimiento_observacion ?? ''),
+    movimiento_tipomovimiento: Number(movementType),
+    tipoMovimiento: Number(movementType),
     // Estas propiedades transitorias son las que construye la ruta nativa
     // /movimientoalmacen/editar/{id} antes de actualizarMovimiento.
     local_id: String(origin.local_id ?? origin.local?.local_id ?? movement.local_id ?? ''),
@@ -543,7 +550,10 @@ function mapEditorItem(item) {
 }
 
 function movementTypeLabel(value) {
-  return String(value) === '1' ? 'TRASLADO' : (String(value || 'Sin especificar'));
+  const code = String(value ?? '');
+  if (code === '1') return 'Traslado';
+  if (code === '2') return 'Devolución';
+  return code || 'Sin especificar';
 }
 
 function mapLinked(rows) {
