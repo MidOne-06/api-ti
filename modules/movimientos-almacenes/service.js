@@ -213,7 +213,10 @@ async function edit(page, session, id, input) {
   const destination = selectedWarehouse(warehouseCatalog, input.almacen_destino, currentDestination, 'destino');
   const next = {
     ...movement,
-    movimiento_fecha: String(input.fecha ?? movement.movimiento_fecha ?? ''),
+    // El editor nativo normaliza la fecha a `YYYY-MM-DD HH:mm:ss` antes de
+    // llamar a actualizarMovimiento. Filament puede entregar el mismo valor
+    // con `T` o sin segundos; ambos se convierten aquí al contrato nativo.
+    movimiento_fecha: normalizeMovementDate(input.fecha ?? movement.movimiento_fecha ?? ''),
     movimiento_encargado: String(input.encargado ?? movement.movimiento_encargado ?? ''),
     movimiento_receptor: String(input.receptor ?? movement.movimiento_receptor ?? ''),
     movimiento_observacion: String(input.observacion ?? movement.movimiento_observacion ?? ''),
@@ -256,6 +259,14 @@ async function edit(page, session, id, input) {
     throw error;
   }
   return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+function normalizeMovementDate(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return raw;
+  const normalized = raw.replace('T', ' ');
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(normalized)) return `${normalized}:00`;
+  return normalized;
 }
 
 function selectedWarehouse(catalog, requestedId, fallback, label) {
