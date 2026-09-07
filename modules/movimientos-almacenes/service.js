@@ -28,6 +28,9 @@ export async function handleRequest(pathname, url, request, response) {
     if (pathname === '/api/almacenes-todos') {
       return json(response, 200, { almacenes: await withSession(allWarehouses) });
     }
+    if (pathname === '/api/tipos-movimiento') {
+      return json(response, 200, { tipos: await withSession(movementTypes) });
+    }
     if (pathname === '/api/items') {
       const query = String(url.searchParams.get('q') ?? '').trim();
       const localId = String(url.searchParams.get('local_id') ?? '');
@@ -92,6 +95,26 @@ async function allWarehouseObjects(page, session) {
   const allowed = new Set(locals.map((local) => String(local.id)));
   return (Array.isArray(result.data) ? result.data : [])
     .filter((row) => allowed.has(String(row.local_id ?? row.local?.local_id ?? '')));
+}
+
+// Logística no obtiene estas opciones desde un catálogo de datos: las publica
+// en el bundle activo como la constante TIPOMOVIMIENTO. Se lee el bundle que
+// Restaurant cargó para la sesión actual para no duplicar ni congelar esos
+// valores en CRM. El selector nativo usa: 1=Traslado y 2=Devolución.
+async function movementTypes(page) {
+  const sources = await page.locator('script[src]').evaluateAll((scripts) => scripts.map((script) => script.src).filter(Boolean));
+  for (const source of sources) {
+    const response = await page.context().request.get(source);
+    if (!response.ok()) continue;
+    const script = await response.text();
+    const match = script.match(/constant\("TIPOMOVIMIENTO",\{TRASLADO:"([^"]+)",DEVOLUCION:"([^"]+)"\}\)/);
+    if (!match) continue;
+    return [
+      { id: match[1], nombre: 'Traslado' },
+      { id: match[2], nombre: 'Devolución' },
+    ];
+  }
+  throw new Error('Restaurant no publicó los tipos de movimiento para la sesión actual.');
 }
 
 async function items(page, session, query, localId) {
@@ -312,6 +335,7 @@ async function createNewMovement(page, session, input) {
 
 async function buildNewMovement(page, session, input) {
   const warehouses = await allWarehouseObjects(page, session);
+  const types = await movementTypes(page, session);
   const localId = String(input.local_id ?? '');
   const origin = selectedWarehouse(warehouses, input.almacen_origen, null, 'origen');
   const destination = selectedWarehouse(warehouses, input.almacen_destino, null, 'destino');
@@ -324,6 +348,8 @@ async function buildNewMovement(page, session, input) {
   if (!encargado) throw new Error('Registra un encargado del envío antes de agregar ítems.');
   const items = Array.isArray(input.items) ? input.items : [];
   if (!items.length) throw new Error('Agrega al menos un ítem al movimiento.');
+  const movementType = String(input.tipo_movimiento ?? '');
+  if (!types.some((type) => type.id === movementType)) throw new Error('Selecciona un tipo de movimiento vigente en Restaurant.');
   const local = origin.local ?? { local_id: localId, local_descripcion: String(origin.local_descripcion ?? '') };
   const movement = {
     movimiento_id: null,
@@ -336,8 +362,8 @@ async function buildNewMovement(page, session, input) {
     movimiento_encargado: encargado,
     movimiento_receptor: String(input.receptor ?? '').trim(),
     movimiento_observacion: String(input.observacion ?? '').trim(),
-    movimiento_tipomovimiento: 1,
-    tipoMovimiento: 1,
+    movimiento_tipomovimiento: Number(movementType),
+    tipoMovimiento: Number(movementType),
     almacenOrigenSeleccionado: origin,
     almacenDestinoSeleccionado: destination,
   };
