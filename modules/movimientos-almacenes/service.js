@@ -225,10 +225,21 @@ async function edit(page, session, id, input) {
     almacenDestinoSeleccionado: destination,
   };
   const products = formatDetailsForRestaurant(editableItems, next);
+  // El flujo nativo de Logística primero emula la modificación para calcular
+  // los movimientos de stock. Ese resultado se envía luego en
+  // `emulacionMovimiento`; omitirlo hace que Restaurant intente resolver su
+  // variable interna `productos` y responda literalmente "productos is not
+  // defined".
+  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
+    movimiento: next,
+    productos,
+  });
+  const emulatedMovements = Array.isArray(emulation.data?.movimientos) ? emulation.data.movimientos : [];
+  console.log(`Restaurant emulación de movimiento ${id}: ${products.length} detalles, ${emulatedMovements.length} movimientos de stock.`);
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
     movimiento: next,
     productos,
-    emulacionMovimiento: [],
+    emulacionMovimiento: emulatedMovements,
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
 }
