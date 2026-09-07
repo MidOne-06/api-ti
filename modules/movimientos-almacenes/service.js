@@ -365,12 +365,22 @@ async function prepareGuideExchange(page, session, input) {
   ]);
   const types = await movementTypes(page);
   const local = imported.origin.local ?? imported.movement.local ?? {};
+  // Restaurant devuelve movimiento_fecha como null al iniciar un canje. El
+  // movimiento de recepción no puede preceder a la emisión ni al traslado de
+  // ninguna guía seleccionada; entregamos el límite vivo al formulario para
+  // que éste no abra vacío ni permita una fecha inválida por defecto.
+  const fechaMinima = latestGuideDate(imported.guides);
+  const fechaImportada = normalizeMovementDate(imported.movement.movimiento_fecha ?? '');
+  const fecha = !fechaImportada || (fechaMinima && fechaImportada < fechaMinima)
+    ? fechaMinima
+    : fechaImportada;
 
   return {
     ids,
     localId: imported.localId,
     local: String(local.local_descripcion ?? imported.origin.local_descripcion ?? ''),
-    fecha: imported.movement.movimiento_fecha ?? '',
+    fecha,
+    fechaMinima,
     encargado: String(imported.movement.movimiento_encargado ?? ''),
     receptor: String(imported.movement.movimiento_receptor ?? ''),
     observacion: String(imported.movement.movimiento_observacion ?? ''),
@@ -415,6 +425,16 @@ function guideDateErrors(guides, movementDate) {
     }
     return errors;
   });
+}
+
+function latestGuideDate(guides) {
+  return guides.reduce((latest, guide) => {
+    for (const field of ['guiaremision_fechaemision', 'guiaremision_fechatraslado']) {
+      const value = normalizeMovementDate(guide[field] ?? '');
+      if (value && (!latest || value > latest)) latest = value;
+    }
+    return latest;
+  }, '');
 }
 
 // Los ítems se vuelven a leer desde Restaurant justo antes de registrar. Solo
