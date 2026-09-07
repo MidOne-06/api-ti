@@ -192,7 +192,7 @@ async function cancel(page, session, id) {
   const products = Array.isArray(movement.listProductos) ? movement.listProductos : [];
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/anularMovimmiento', {
     movimiento: movement,
-    productos,
+    productos: products,
   });
   return { ok: true, mensajes: result.mensajes ?? [] };
 }
@@ -230,17 +230,31 @@ async function edit(page, session, id, input) {
   // `emulacionMovimiento`; omitirlo hace que Restaurant intente resolver su
   // variable interna `productos` y responda literalmente "productos is not
   // defined".
-  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
-    movimiento: next,
-    productos,
-  });
+  console.log(`Movimiento ${id}: iniciando emulación (${products.length} detalles).`);
+  let emulation;
+  try {
+    emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
+      movimiento: next,
+      productos: products,
+    });
+  } catch (error) {
+    console.error(`Movimiento ${id}: falló la emulación: ${error.message}`);
+    throw error;
+  }
   const emulatedMovements = Array.isArray(emulation.data?.movimientos) ? emulation.data.movimientos : [];
   console.log(`Restaurant emulación de movimiento ${id}: ${products.length} detalles, ${emulatedMovements.length} movimientos de stock.`);
-  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
-    movimiento: next,
-    productos,
-    emulacionMovimiento: emulatedMovements,
-  });
+  console.log(`Movimiento ${id}: enviando actualización (${emulatedMovements.length} movimientos emulados).`);
+  let result;
+  try {
+    result = await apiPost(page, session.token, '/logistica/rest/movimiento/actualizarMovimiento', {
+      movimiento: next,
+      productos: products,
+      emulacionMovimiento: emulatedMovements,
+    });
+  } catch (error) {
+    console.error(`Movimiento ${id}: falló la actualización: ${error.message}`);
+    throw error;
+  }
   return { ok: true, mensajes: result.mensajes ?? [] };
 }
 
