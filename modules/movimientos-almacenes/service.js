@@ -304,9 +304,10 @@ function formatDetailsForRestaurant(rows, movement) {
     .map((row) => {
       const itemType = Number(row.item_tipo ?? row.tipo ?? 0);
       const itemId = String(row.item_id ?? '');
+      const unit = normalizedUnit(row);
       const detail = {
         detallemovimiento_descripcion: row.item_descripcion ?? row.detallemovimiento_descripcion ?? '',
-        detallemovimiento_unidadmedida: row.unidadmedidainsumo ?? row.unidadmedida_descripcion ?? '',
+        detallemovimiento_unidadmedida: unit,
         detallemovimiento_cantidad: Number(row.item_cantidad ?? row.detallemovimiento_cantidad ?? 0),
         detallemovimiento_cantidadsolicitada: row.item_cantidad_original ?? row.detallemovimiento_cantidadsolicitada ?? null,
         movimiento_id: String(movement.movimiento_id ?? '-1'),
@@ -336,6 +337,22 @@ function formatDetailsForRestaurant(rows, movement) {
       }
       return detail;
     });
+}
+
+// El objeto de unidad que entrega obtenerMovimiento es parte del detalle que
+// Logística reenvía. Para ítems nuevos el formulario sólo conserva sus campos
+// visibles, así que reconstruimos ese objeto desde el catálogo vivo sin usar
+// una unidad fija ni depender de la BD del CRM.
+function normalizedUnit(row) {
+  if (row.unidadmedidainsumo && typeof row.unidadmedidainsumo === 'object') return row.unidadmedidainsumo;
+  const id = row.unidadmedidainsumo_id ?? row.unidadmedida_id ?? null;
+  const description = row.unidadmedida_descripcion ?? row.unidad ?? '';
+  if (id == null && !description) return null;
+  return {
+    unidadmedidainsumo_id: id == null ? null : String(id),
+    unidadmedidainsumo_descripcion: String(description),
+    unidadmedidainsumo_sigla: String(row.presentacion_nombre ?? row.presentacion ?? ''),
+  };
 }
 
 async function report(page, session, url, response) {
