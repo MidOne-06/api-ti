@@ -49,6 +49,15 @@ export async function handleRequest(pathname, url, request, response) {
     if (pathname === '/api/guias-importadas/canjear' && request.method === 'POST') {
       return json(response, 200, await withSession(async (page, session) => confirmGuideExchange(page, session, await readJsonBody(request))));
     }
+    // El canje masivo nunca mezcla guías incompatibles: primero las agrupa
+    // únicamente con datos vivos de Restaurant y recién después confirma cada
+    // grupo como un movimiento independiente.
+    if (pathname === '/api/guias-importadas/canje-masivo/preparar' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => prepareBulkGuideExchange(page, session, await readJsonBody(request))));
+    }
+    if (pathname === '/api/guias-importadas/canje-masivo/confirmar' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => confirmBulkGuideExchange(page, session, await readJsonBody(request))));
+    }
     if (pathname === '/api/movimientos') return json(response, 200, await withSession((page, session) => list(page, session, url)));
     const detailMatch = pathname.match(/^\/api\/movimientos\/(\d+)$/);
     if (detailMatch) return json(response, 200, await withSession((page, session) => detail(page, session, detailMatch[1])));
@@ -334,7 +343,7 @@ function guideIds(input) {
   return normalized;
 }
 
-async function importedGuideMovement(page, session, ids) {
+async function importedGuideMovement(page, session, ids, catalog = null) {
   const result = await apiPost(page, session.token, '/logistica/rest/movimiento/obtenerGuiaRemisionAImportar', ids);
   const data = result.data ?? {};
   const movement = data.movimiento ?? {};
@@ -342,14 +351,14 @@ async function importedGuideMovement(page, session, ids) {
   const guides = Array.isArray(data.guiaremisionList) ? data.guiaremisionList : [];
   if (!products.length) throw new Error('Restaurant no devolvió ítems para las guías seleccionadas.');
 
-  const catalog = await allWarehouseObjects(page, session);
+  const warehouseCatalog = catalog ?? await allWarehouseObjects(page, session);
   const localId = String(movement.local_id ?? movement.local?.local_id ?? '');
   const originId = String(movement.almacen_id ?? movement.almacenOrigenSeleccionado?.almacen_id ?? movement.almacenorigen?.almacen_id ?? products[0]?.almacen_id ?? products[0]?.almacen?.almacen_id ?? '');
   const destinationLocalId = String(movement.localdestino ?? movement.localDestino?.local_id ?? movement.localdestino_id ?? '');
-  const origin = catalog.find((row) => String(row.almacen_id ?? '') === originId && String(row.local_id ?? row.local?.local_id ?? '') === localId);
+  const origin = warehouseCatalog.find((row) => String(row.almacen_id ?? '') === originId && String(row.local_id ?? row.local?.local_id ?? '') === localId);
   if (!origin) throw new Error('Restaurant no devolvió el almacén de origen vigente para las guías seleccionadas.');
 
-  const destinations = catalog.filter((row) => String(row.local_id ?? row.local?.local_id ?? '') === destinationLocalId && String(row.almacen_id ?? '') !== String(origin.almacen_id));
+  const destinations = warehouseCatalog.filter((row) => String(row.local_id ?? row.local?.local_id ?? '') === destinationLocalId && String(row.almacen_id ?? '') !== String(origin.almacen_id));
   if (!destinations.length) throw new Error('Restaurant no devolvió almacenes de destino vigentes para la guía interna.');
   const selectedDestinationId = String(movement.almacenDestinoSeleccionado?.almacen_id ?? movement.almacendestino?.almacen_id ?? destinations[0].almacen_id);
   const destination = destinations.find((row) => String(row.almacen_id ?? '') === selectedDestinationId) ?? destinations[0];
@@ -357,13 +366,11 @@ async function importedGuideMovement(page, session, ids) {
   return { movement, products, guides, origin, destinations, destination, localId };
 }
 
-async function prepareGuideExchange(page, session, input) {
+async function prepareGuideExchange(page, session, input, context = {}) {
   const ids = guideIds(input);
-  const [imported, permissionTags] = await Promise.all([
-    importedGuideMovement(page, session, ids),
-    restaurantPermissionTags(page),
-  ]);
-  const types = await movementTypes(page);
+  const imported = await importedGuideMovement(page, session, ids, context.catalog ?? null);
+  const permissionTags = context.permissionTags ?? await restaurantPermissionTags(page);
+  const types = context.types ?? await movementTypes(page);
   const local = imported.origin.local ?? imported.movement.local ?? {};
   // Restaurant devuelve movimiento_fecha como null al iniciar un canje. El
   // movimiento de recepción no puede preceder a la emisión ni al traslado de
@@ -399,6 +406,114 @@ async function prepareGuideExchange(page, session, input) {
       unidad: String(row.unidadmedidainsumo?.unidadmedidainsumo_descripcion ?? row.unidadmedida_descripcion ?? row.item_unidadmedida ?? ''),
     })),
   };
+}
+
+function warehouseLocalId(warehouse) {
+  return String(warehouse?.local_id ?? warehouse?.local?.local_id ?? warehouse?.localDestino?.local_id ?? '');
+}
+
+function guideExchangeGroupKey(imported) {
+  const originId = String(imported.origin?.almacen_id ?? '');
+  const destinationLocalId = warehouseLocalId(imported.destination);
+  if (!imported.localId || !originId || !destinationLocalId) {
+    throw new Error('Restaurant no devolvió la ruta completa de la guía para el canje masivo.');
+  }
+
+  // Un movimiento de Restaurant no puede cruzar estas tres fronteras. El
+  // almacén de destino sí puede elegirse dentro del mismo local de destino.
+  return `${imported.localId}:${originId}:${destinationLocalId}`;
+}
+
+function sameGuideIds(first, second) {
+  const a = [...new Set(first.map((id) => String(id)))].sort();
+  const b = [...new Set(second.map((id) => String(id)))].sort();
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
+/**
+ * Lee cada guía desde Restaurant, calcula grupos compatibles y los vuelve a
+ * hidratar como grupo. No registra ni modifica movimientos en esta etapa.
+ */
+async function prepareBulkGuideExchange(page, session, input) {
+  const ids = guideIds(input);
+  if (ids.length > 20) throw new Error('El canje masivo admite como máximo 20 guías por operación.');
+
+  await assertGuidesPending(page, session, ids);
+  const [catalog, permissionTags, types] = await Promise.all([
+    allWarehouseObjects(page, session),
+    restaurantPermissionTags(page),
+    movementTypes(page),
+  ]);
+  const groupedIds = new Map();
+
+  // Secuencial a propósito: Restaurant mantiene una sesión de navegador por
+  // operación y una ráfaga de consultas simultáneas puede invalidarla.
+  for (const id of ids) {
+    const imported = await importedGuideMovement(page, session, [id], catalog);
+    const key = guideExchangeGroupKey(imported);
+    groupedIds.set(key, [...(groupedIds.get(key) ?? []), id]);
+  }
+
+  const groups = [];
+  for (const [key, groupIds] of groupedIds) {
+    const prepared = await prepareGuideExchange(page, session, { ids: groupIds }, { catalog, permissionTags, types });
+    groups.push({
+      clave: key,
+      ids: groupIds,
+      titulo: `${prepared.local} · ${prepared.almacenOrigen.nombre} → ${prepared.almacenDestino.nombre}`,
+      ...prepared,
+    });
+  }
+
+  return { ids, groups };
+}
+
+/**
+ * Revalida toda la selección y cada grupo con Restaurant inmediatamente antes
+ * de escribir. Los grupos son independientes: si uno es rechazado, los demás
+ * continúan y el resultado identifica sin ambigüedad qué se registró.
+ */
+async function confirmBulkGuideExchange(page, session, input) {
+  if (input.confirmar !== true) throw new Error('Confirma el canje masivo antes de registrar movimientos.');
+  const expectedIds = guideIds(input);
+  const submittedGroups = Array.isArray(input.grupos) ? input.grupos : [];
+  if (!submittedGroups.length) throw new Error('No hay grupos de guías para confirmar.');
+
+  const current = await prepareBulkGuideExchange(page, session, { ids: expectedIds });
+  const currentIds = current.groups.flatMap((group) => group.ids);
+  if (!sameGuideIds(expectedIds, currentIds)) throw new Error('Las guías cambiaron en Restaurant. Vuelve a abrir el canje masivo.');
+
+  const submittedByKey = new Map();
+  const submittedIds = [];
+  for (const group of submittedGroups) {
+    const key = String(group?.clave ?? '');
+    const ids = guideIds({ ids: group?.ids });
+    if (!key || submittedByKey.has(key)) throw new Error('La estructura de grupos enviada no es válida. Vuelve a abrir el canje masivo.');
+    submittedByKey.set(key, group);
+    submittedIds.push(...ids);
+  }
+  if (!sameGuideIds(expectedIds, submittedIds)) throw new Error('La selección de guías no coincide con la confirmación. Vuelve a abrir el canje masivo.');
+
+  const results = [];
+  for (const currentGroup of current.groups) {
+    const submitted = submittedByKey.get(currentGroup.clave);
+    if (!submitted || !sameGuideIds(currentGroup.ids, submitted.ids ?? [])) {
+      throw new Error('Restaurant cambió la compatibilidad de las guías. Vuelve a abrir el canje masivo.');
+    }
+
+    try {
+      const result = await confirmGuideExchange(page, session, {
+        ...submitted,
+        ids: currentGroup.ids,
+        confirmar: true,
+      });
+      results.push({ clave: currentGroup.clave, ids: currentGroup.ids, ok: true, id: result.id, verification: result.verification ?? [] });
+    } catch (error) {
+      results.push({ clave: currentGroup.clave, ids: currentGroup.ids, ok: false, error: error.message });
+    }
+  }
+
+  return { ok: results.every((result) => result.ok), results };
 }
 
 function guideIsReceived(guide) {
