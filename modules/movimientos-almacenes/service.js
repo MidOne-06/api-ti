@@ -34,6 +34,12 @@ export async function handleRequest(pathname, url, request, response) {
       if (query.length < 2 || !/^\d+$/.test(localId)) return json(response, 200, { items: [] });
       return json(response, 200, { items: await withSession((page, session) => items(page, session, query, localId)) });
     }
+    if (pathname === '/api/nuevo/previsualizar' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => previewNewMovement(page, session, await readJsonBody(request))));
+    }
+    if (pathname === '/api/nuevo/guardar' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => createNewMovement(page, session, await readJsonBody(request))));
+    }
     if (pathname === '/api/movimientos') return json(response, 200, await withSession((page, session) => list(page, session, url)));
     const detailMatch = pathname.match(/^\/api\/movimientos\/(\d+)$/);
     if (detailMatch) return json(response, 200, await withSession((page, session) => detail(page, session, detailMatch[1])));
@@ -259,6 +265,95 @@ async function edit(page, session, id, input) {
     throw error;
   }
   return { ok: true, mensajes: result.mensajes ?? [] };
+}
+
+// Alta de movimientos: replica el orden del controlador nativo de Logística.
+// La emulación no guarda nada; el POST a movimiento/agregar sólo se ejecuta
+// cuando el usuario confirma Guardar desde el CRM.
+async function previewNewMovement(page, session, input) {
+  const { movement, products } = await buildNewMovement(page, session, input);
+  const validation = await apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products);
+  if (String(validation.data ?? '') !== '0') {
+    throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems seleccionados.');
+  }
+  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
+    movimiento: movement,
+    productos: products,
+  });
+  const data = emulation.data ?? {};
+  return {
+    ok: true,
+    movimientos: Array.isArray(data.movimientos) ? sanitizeRemoteData(data.movimientos) : [],
+    restringidoPorStockNegativo: Boolean(data.operacionRestringidaPorStockNegativo),
+    configuracionRestringirStockNegativo: Boolean(data.configuracionRestringirSalidasConStockNegativo),
+  };
+}
+
+async function createNewMovement(page, session, input) {
+  if (input.confirmar !== true) throw new Error('Confirma el guardado antes de registrar el movimiento.');
+  const { movement, products } = await buildNewMovement(page, session, input);
+  const validation = await apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products);
+  if (String(validation.data ?? '') !== '0') {
+    throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems seleccionados.');
+  }
+  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
+    movimiento: movement,
+    productos: products,
+  });
+  const data = emulation.data ?? {};
+  if (data.operacionRestringidaPorStockNegativo) throw new Error('Restaurant restringió el movimiento porque dejaría stock negativo.');
+  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/agregar', {
+    movimiento: movement,
+    productos: products,
+    emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [],
+  });
+  return { ok: true, id: String(result.data?.movimiento_id ?? result.data?.id ?? ''), mensajes: result.mensajes ?? [] };
+}
+
+async function buildNewMovement(page, session, input) {
+  const warehouses = await allWarehouseObjects(page, session);
+  const localId = String(input.local_id ?? '');
+  const origin = selectedWarehouse(warehouses, input.almacen_origen, null, 'origen');
+  const destination = selectedWarehouse(warehouses, input.almacen_destino, null, 'destino');
+  const allowedLocals = new Set((await fetchLocals(page, session)).map((local) => String(local.id)));
+  if (!allowedLocals.has(localId) || String(origin.local_id ?? origin.local?.local_id ?? '') !== localId) {
+    throw new Error('El almacén de origen no corresponde a un local permitido.');
+  }
+  if (String(origin.almacen_id) === String(destination.almacen_id)) throw new Error('El almacén de origen y destino deben ser distintos.');
+  const encargado = String(input.encargado ?? '').trim();
+  if (!encargado) throw new Error('Registra un encargado del envío antes de agregar ítems.');
+  const items = Array.isArray(input.items) ? input.items : [];
+  if (!items.length) throw new Error('Agrega al menos un ítem al movimiento.');
+  const local = origin.local ?? { local_id: localId, local_descripcion: String(origin.local_descripcion ?? '') };
+  const movement = {
+    movimiento_id: null,
+    conGuia: '0',
+    numerodoc: null,
+    localSeleccionado: local,
+    local_id: localId,
+    movimiento_checksum: `WEB-${localId}-${Math.random().toString(36).slice(2, 11)}-${Date.now()}`,
+    movimiento_fecha: normalizeMovementDate(input.fecha),
+    movimiento_encargado: encargado,
+    movimiento_receptor: String(input.receptor ?? '').trim(),
+    movimiento_observacion: String(input.observacion ?? '').trim(),
+    movimiento_tipomovimiento: 1,
+    tipoMovimiento: 1,
+    almacenOrigenSeleccionado: origin,
+    almacenDestinoSeleccionado: destination,
+  };
+  if (!movement.movimiento_fecha) throw new Error('Selecciona una fecha de movimiento válida.');
+  const products = formatDetailsForRestaurant(items.map((item) => ({
+    ...item,
+    item_cantidad: item.cantidad_a_mover ?? item.cantidad,
+    item_cantidad_original: item.cantidad_a_mover ?? item.cantidad,
+  })), movement).filter((item) => Number(item.detallemovimiento_cantidad) > 0);
+  if (!products.length) throw new Error('Cada ítem debe tener una cantidad mayor a cero.');
+  return { movement, products };
+}
+
+function firstMessage(result) {
+  const messages = result?.mensajes;
+  return Array.isArray(messages) ? String(messages[0] ?? '') : String(messages ?? '');
 }
 
 function normalizeMovementDate(value) {
