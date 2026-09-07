@@ -458,38 +458,14 @@ async function confirmGuideExchange(page, session, input) {
   };
   const products = formatDetailsForRestaurant(imported.products, movement).filter((row) => Number(row.detallemovimiento_cantidad) > 0);
   if (!products.length) throw new Error('Restaurant no devolvió cantidades válidas para canjear.');
-  console.log(`Canje de guía ${ids.join(',')} payload emulación: ${JSON.stringify({
-    movimiento: {
-      local_id: movement.local_id,
-      movimiento_fecha: movement.movimiento_fecha,
-      movimiento_tipomovimiento: movement.movimiento_tipomovimiento,
-      localSeleccionado: movement.localSeleccionado?.local_id,
-      almacenOrigenSeleccionado: movement.almacenOrigenSeleccionado?.almacen_id,
-      almacenDestinoSeleccionado: movement.almacenDestinoSeleccionado?.almacen_id,
-      listaGuiaremisionImportada: movement.listaGuiaremisionImportada,
-    },
-    primerDetalle: {
-      tipo: products[0]?.tipo,
-      insumo_id: products[0]?.insumo_id,
-      producto_id: products[0]?.producto_id,
-      presentacioninsumo_id: products[0]?.presentacioninsumo_id,
-      presentacioninsumo_cantidad: products[0]?.presentacioninsumo_cantidad,
-      detallemovimiento_cantidad: products[0]?.detallemovimiento_cantidad,
-      detallemovimiento_cantidad_original: products[0]?.detallemovimiento_cantidad_original,
-      almacen_id: products[0]?.almacen_id,
-      detallemovimiento_almacenorigenid: products[0]?.detallemovimiento_almacenorigenid,
-      detallemovimiento_almacendestinoid: products[0]?.detallemovimiento_almacendestinoid,
-      unidadmedidainsumo: products[0]?.unidadmedidainsumo?.unidadmedidainsumo_id ?? null,
-    },
-  })}`);
   const validation = await runStage('validación de stock', () => apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products));
   if (String(validation.data ?? '') !== '0') throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems de la guía.');
   // El canje crea un movimiento nuevo y sigue exactamente la rama REGISTRO
   // del controlador nativo `movimientoalmacen.canjeguias`.
-  const emulation = await runStage('emulación de stock', () => apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/1/4', { movimiento, productos: products }));
+  const emulation = await runStage('emulación de stock', () => apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/1/4', { movimiento: movement, productos: products }));
   const data = emulation.data ?? {};
   if (data.operacionRestringidaPorStockNegativo) throw new Error('Restaurant restringió el canje porque dejaría stock negativo.');
-  const result = await runStage('registro del movimiento', () => apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] }));
+  const result = await runStage('registro del movimiento', () => apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento: movement, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] }));
   const id = String(result.data?.movimiento_id ?? result.data?.id ?? result.data ?? '');
   const verification = await Promise.all(ids.map(async (guideId) => {
     try {
