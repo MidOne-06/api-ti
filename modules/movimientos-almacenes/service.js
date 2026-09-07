@@ -310,7 +310,10 @@ async function createNewMovement(page, session, input) {
   if (String(validation.data ?? '') !== '0') {
     throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems seleccionados.');
   }
-  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
+  // Logística usa 1=REGISTRO al crear un movimiento. El código 2 es para
+  // MODIFICACIÓN y Restaurant rechaza el payload de alta/canje con
+  // "movimiento is not defined" cuando se usa en este flujo.
+  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/1/4', {
     movimiento: movement,
     productos: products,
   });
@@ -457,7 +460,9 @@ async function confirmGuideExchange(page, session, input) {
   if (!products.length) throw new Error('Restaurant no devolvió cantidades válidas para canjear.');
   const validation = await runStage('validación de stock', () => apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products));
   if (String(validation.data ?? '') !== '0') throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems de la guía.');
-  const emulation = await runStage('emulación de stock', () => apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', { movimiento, productos: products }));
+  // El canje crea un movimiento nuevo y sigue exactamente la rama REGISTRO
+  // del controlador nativo `movimientoalmacen.canjeguias`.
+  const emulation = await runStage('emulación de stock', () => apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/1/4', { movimiento, productos: products }));
   const data = emulation.data ?? {};
   if (data.operacionRestringidaPorStockNegativo) throw new Error('Restaurant restringió el canje porque dejaría stock negativo.');
   const result = await runStage('registro del movimiento', () => apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] }));
