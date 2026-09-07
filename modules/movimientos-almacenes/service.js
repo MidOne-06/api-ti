@@ -1,7 +1,7 @@
 import { json, readJsonBody, serveStatic } from '../../lib/http.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { apiGet, apiPost, fetchBinary, fetchLocals, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
+import { apiGet, apiPost, fetchBinary, fetchLocals, restaurantPermissionTags, sanitizeRemoteData, withSession } from '../../lib/restaurant-session.js';
 
 export const prefix = '/movimientos-almacenes';
 export const publicDir = join(dirname(fileURLToPath(import.meta.url)), 'public');
@@ -359,7 +359,10 @@ async function importedGuideMovement(page, session, ids) {
 
 async function prepareGuideExchange(page, session, input) {
   const ids = guideIds(input);
-  const imported = await importedGuideMovement(page, session, ids);
+  const [imported, permissionTags] = await Promise.all([
+    importedGuideMovement(page, session, ids),
+    restaurantPermissionTags(page),
+  ]);
   const types = await movementTypes(page);
   const local = imported.origin.local ?? imported.movement.local ?? {};
 
@@ -376,6 +379,9 @@ async function prepareGuideExchange(page, session, input) {
     destinos: imported.destinations.map((row) => ({ id: String(row.almacen_id), nombre: `${row.local?.local_descripcion ?? row.local_descripcion ?? ''} · ${row.almacen_descripcion ?? ''}`.trim() })),
     tipoMovimiento: String(imported.movement.movimiento_tipomovimiento ?? types[0]?.id ?? ''),
     tipos: types,
+    // Replica el control nativo del ERP: el campo Cant. a mover se habilita
+    // exclusivamente cuando la sesión actual de Restaurant tiene este ACL.
+    canEditGuideQuantity: permissionTags.includes('movimientoentrealmacenes.editarcantidadguia'),
     guias: imported.guides.map((row) => ({ id: String(row.guiaremision_id ?? row.id ?? ''), serie: String(row.guiaremision_serie ?? row.serie ?? ''), numero: String(row.guiaremision_correlativo ?? row.correlativo ?? '') })),
     items: imported.products.map((row) => ({
       codigo: String(row.item_codigo ?? ''), descripcion: String(row.item_descripcion ?? row.detallemovimiento_descripcion ?? ''),
@@ -411,6 +417,21 @@ function guideDateErrors(guides, movementDate) {
   });
 }
 
+// Los ítems se vuelven a leer desde Restaurant justo antes de registrar. Solo
+// se reemplaza la cantidad visible, por posición, si el ACL vivo lo autoriza;
+// identificadores, almacenes y presentación nunca provienen del navegador.
+function applyGuideQuantityOverrides(products, submittedItems, canEditQuantity) {
+  if (!Array.isArray(submittedItems) || !submittedItems.length) return products;
+  if (!canEditQuantity) throw new Error('Restaurant no autoriza editar las cantidades de esta guía para la sesión actual.');
+  if (submittedItems.length !== products.length) throw new Error('Los ítems de la guía cambiaron en Restaurant. Vuelve a abrir el canje.');
+
+  return products.map((product, index) => {
+    const quantity = Number(submittedItems[index]?.cantidad);
+    if (!Number.isFinite(quantity) || quantity < 0) throw new Error(`La cantidad del ítem ${index + 1} no es válida.`);
+    return { ...product, item_cantidad: quantity };
+  });
+}
+
 async function confirmGuideExchange(page, session, input) {
   if (input.confirmar !== true) throw new Error('Confirma el canje antes de registrar el movimiento.');
   const ids = guideIds(input);
@@ -425,7 +446,10 @@ async function confirmGuideExchange(page, session, input) {
     }
   };
   await runStage('validación de guías pendientes', () => assertGuidesPending(page, session, ids));
-  const imported = await runStage('hidratación de guías', () => importedGuideMovement(page, session, ids));
+  const [imported, permissionTags] = await runStage('hidratación de guías y permisos', () => Promise.all([
+    importedGuideMovement(page, session, ids),
+    restaurantPermissionTags(page),
+  ]));
   const destinationId = String(input.almacen_destino ?? imported.destination.almacen_id);
   const destination = imported.destinations.find((row) => String(row.almacen_id ?? '') === destinationId);
   if (!destination) throw new Error('El almacén de destino ya no corresponde al destino de las guías en Restaurant.');
@@ -456,7 +480,12 @@ async function confirmGuideExchange(page, session, input) {
     almacenDestinoSeleccionado: destination,
     listaGuiaremisionImportada: ids,
   };
-  const products = formatDetailsForRestaurant(imported.products, movement).filter((row) => Number(row.detallemovimiento_cantidad) > 0);
+  const sourceProducts = applyGuideQuantityOverrides(
+    imported.products,
+    input.items,
+    permissionTags.includes('movimientoentrealmacenes.editarcantidadguia'),
+  );
+  const products = formatDetailsForRestaurant(sourceProducts, movement).filter((row) => Number(row.detallemovimiento_cantidad) > 0);
   if (!products.length) throw new Error('Restaurant no devolvió cantidades válidas para canjear.');
   const validation = await runStage('validación de stock', () => apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products));
   if (String(validation.data ?? '') !== '0') throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems de la guía.');
