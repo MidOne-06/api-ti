@@ -623,8 +623,14 @@ function formatDetailsForRestaurant(rows, movement) {
         detail.producto_id = null;
         detail.producto_codigo = row.item_codigo ?? '';
         detail.presentacioninsumo_id = row.presentacion_id ?? null;
-        detail.presentacioninsumo_cantidad = row.presentacioninsumo_cantidad ?? row.presentacion_cantidad ?? null;
+        // El importador de guías devuelve `cantidadPresentacion`, mientras el
+        // buscador de ítems devuelve `presentacioninsumo_cantidad`. El
+        // controlador nativo conserva ambos valores al formatear el detalle.
+        detail.presentacioninsumo_cantidad = row.presentacioninsumo_cantidad ?? row.presentacion_cantidad ?? row.cantidadPresentacion ?? null;
       }
+      // Una guía importada marca la cantidad original en `item_cantidad_aux`.
+      // Restaurant la necesita para validar que el canje no exceda la guía.
+      if (row.item_cantidad_aux != null) detail.detallemovimiento_cantidad_original = row.item_cantidad_aux;
       return detail;
     });
 }
