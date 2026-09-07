@@ -40,6 +40,15 @@ export async function handleRequest(pathname, url, request, response) {
     if (pathname === '/api/nuevo/guardar' && request.method === 'POST') {
       return json(response, 200, await withSession(async (page, session) => createNewMovement(page, session, await readJsonBody(request))));
     }
+    // Canje de guías internas: Restaurant sigue siendo la única fuente de
+    // verdad. El primer endpoint sólo hidrata el formulario; el segundo es la
+    // única operación que registra el movimiento y vincula las guías.
+    if (pathname === '/api/guias-importadas' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => prepareGuideExchange(page, session, await readJsonBody(request))));
+    }
+    if (pathname === '/api/guias-importadas/canjear' && request.method === 'POST') {
+      return json(response, 200, await withSession(async (page, session) => confirmGuideExchange(page, session, await readJsonBody(request))));
+    }
     if (pathname === '/api/movimientos') return json(response, 200, await withSession((page, session) => list(page, session, url)));
     const detailMatch = pathname.match(/^\/api\/movimientos\/(\d+)$/);
     if (detailMatch) return json(response, 200, await withSession((page, session) => detail(page, session, detailMatch[1])));
@@ -313,6 +322,144 @@ async function createNewMovement(page, session, input) {
     emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [],
   });
   return { ok: true, id: String(result.data?.movimiento_id ?? result.data?.id ?? ''), mensajes: result.mensajes ?? [] };
+}
+
+function guideIds(input) {
+  const ids = Array.isArray(input?.ids) ? input.ids : [];
+  const normalized = [...new Set(ids.map((id) => String(id).trim()).filter((id) => /^\d+$/.test(id)))];
+  if (!normalized.length) throw new Error('Selecciona al menos una guía interna válida.');
+  return normalized;
+}
+
+async function importedGuideMovement(page, session, ids) {
+  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/obtenerGuiaRemisionAImportar', ids);
+  const data = result.data ?? {};
+  const movement = data.movimiento ?? {};
+  const products = Array.isArray(data.productos) ? data.productos : [];
+  const guides = Array.isArray(data.guiaremisionList) ? data.guiaremisionList : [];
+  if (!products.length) throw new Error('Restaurant no devolvió ítems para las guías seleccionadas.');
+
+  const catalog = await allWarehouseObjects(page, session);
+  const localId = String(movement.local_id ?? movement.local?.local_id ?? '');
+  const originId = String(movement.almacen_id ?? movement.almacenOrigenSeleccionado?.almacen_id ?? movement.almacenorigen?.almacen_id ?? products[0]?.almacen_id ?? products[0]?.almacen?.almacen_id ?? '');
+  const destinationLocalId = String(movement.localdestino ?? movement.localDestino?.local_id ?? movement.localdestino_id ?? '');
+  const origin = catalog.find((row) => String(row.almacen_id ?? '') === originId && String(row.local_id ?? row.local?.local_id ?? '') === localId);
+  if (!origin) throw new Error('Restaurant no devolvió el almacén de origen vigente para las guías seleccionadas.');
+
+  const destinations = catalog.filter((row) => String(row.local_id ?? row.local?.local_id ?? '') === destinationLocalId && String(row.almacen_id ?? '') !== String(origin.almacen_id));
+  if (!destinations.length) throw new Error('Restaurant no devolvió almacenes de destino vigentes para la guía interna.');
+  const selectedDestinationId = String(movement.almacenDestinoSeleccionado?.almacen_id ?? movement.almacendestino?.almacen_id ?? destinations[0].almacen_id);
+  const destination = destinations.find((row) => String(row.almacen_id ?? '') === selectedDestinationId) ?? destinations[0];
+
+  return { movement, products, guides, origin, destinations, destination, localId };
+}
+
+async function prepareGuideExchange(page, session, input) {
+  const ids = guideIds(input);
+  const imported = await importedGuideMovement(page, session, ids);
+  const types = await movementTypes(page);
+  const local = imported.origin.local ?? imported.movement.local ?? {};
+
+  return {
+    ids,
+    localId: imported.localId,
+    local: String(local.local_descripcion ?? imported.origin.local_descripcion ?? ''),
+    fecha: imported.movement.movimiento_fecha ?? '',
+    encargado: String(imported.movement.movimiento_encargado ?? ''),
+    receptor: String(imported.movement.movimiento_receptor ?? ''),
+    observacion: String(imported.movement.movimiento_observacion ?? ''),
+    almacenOrigen: { id: String(imported.origin.almacen_id), nombre: String(imported.origin.almacen_descripcion ?? '') },
+    almacenDestino: { id: String(imported.destination.almacen_id), nombre: String(imported.destination.almacen_descripcion ?? '') },
+    destinos: imported.destinations.map((row) => ({ id: String(row.almacen_id), nombre: `${row.local?.local_descripcion ?? row.local_descripcion ?? ''} · ${row.almacen_descripcion ?? ''}`.trim() })),
+    tipoMovimiento: String(imported.movement.movimiento_tipomovimiento ?? types[0]?.id ?? ''),
+    tipos: types,
+    guias: imported.guides.map((row) => ({ id: String(row.guiaremision_id ?? row.id ?? ''), serie: String(row.guiaremision_serie ?? row.serie ?? ''), numero: String(row.guiaremision_correlativo ?? row.correlativo ?? '') })),
+    items: imported.products.map((row) => ({
+      codigo: String(row.item_codigo ?? ''), descripcion: String(row.item_descripcion ?? row.detallemovimiento_descripcion ?? ''),
+      presentacion: String(row.presentacion_nombre ?? row.item_presentacion ?? ''), cantidad: Number(row.item_cantidad ?? row.detallemovimiento_cantidad ?? 0),
+      unidad: String(row.unidadmedidainsumo?.unidadmedidainsumo_descripcion ?? row.unidadmedida_descripcion ?? row.item_unidadmedida ?? ''),
+    })),
+  };
+}
+
+function guideIsReceived(guide) {
+  const value = guide?.guiaremision_recepcionada ?? guide?.recepcionada ?? guide?.guiaremision_estadorecepcion ?? null;
+  return ['SI', 'SÍ', 'TRUE', 'RECEPCIONADA'].includes(String(value ?? '').trim().toUpperCase());
+}
+
+async function assertGuidesPending(page, session, ids) {
+  const sources = await Promise.all(ids.map((id) => apiGet(page, session.token, `/logistica/rest/common/guiaremision/obtenerGuiaremision/${id}`)));
+  for (const source of sources) {
+    const guide = source.data?.guiaremision ?? source.data ?? {};
+    if (String(guide.guiaremision_estado ?? guide.estado ?? '1') !== '1') throw new Error(`La guía interna #${guide.guiaremision_id ?? ''} ya no está activa en Restaurant.`);
+    if (guideIsReceived(guide)) throw new Error(`La guía interna #${guide.guiaremision_id ?? ''} ya fue recepcionada o vinculada por Restaurant.`);
+  }
+}
+
+function guideDateErrors(guides, movementDate) {
+  return guides.flatMap((guide) => {
+    const errors = [];
+    const id = String(guide.guiaremision_id ?? guide.id ?? '');
+    for (const [field, label] of [['guiaremision_fechaemision', 'emisión'], ['guiaremision_fechatraslado', 'traslado']]) {
+      const value = normalizeMovementDate(guide[field] ?? '');
+      if (value && value > movementDate) errors.push(`La guía interna #${id} tiene una fecha de ${label} mayor a la del movimiento.`);
+    }
+    return errors;
+  });
+}
+
+async function confirmGuideExchange(page, session, input) {
+  if (input.confirmar !== true) throw new Error('Confirma el canje antes de registrar el movimiento.');
+  const ids = guideIds(input);
+  await assertGuidesPending(page, session, ids);
+  const imported = await importedGuideMovement(page, session, ids);
+  const destinationId = String(input.almacen_destino ?? imported.destination.almacen_id);
+  const destination = imported.destinations.find((row) => String(row.almacen_id ?? '') === destinationId);
+  if (!destination) throw new Error('El almacén de destino ya no corresponde al destino de las guías en Restaurant.');
+  const types = await movementTypes(page);
+  const type = String(input.tipo_movimiento ?? imported.movement.movimiento_tipomovimiento ?? '');
+  if (!types.some((row) => String(row.id) === type)) throw new Error('Selecciona un tipo de movimiento vigente en Restaurant.');
+  const fecha = normalizeMovementDate(input.fecha ?? imported.movement.movimiento_fecha ?? '');
+  if (!fecha) throw new Error('Selecciona una fecha de movimiento válida.');
+  const dateErrors = guideDateErrors(imported.guides, fecha);
+  if (dateErrors.length) throw new Error(dateErrors[0]);
+  const encargado = String(input.encargado ?? imported.movement.movimiento_encargado ?? '').trim();
+  if (!encargado) throw new Error('Registra un encargado del envío.');
+
+  const local = imported.origin.local ?? imported.movement.local ?? { local_id: imported.localId, local_descripcion: imported.origin.local_descripcion ?? '' };
+  const movement = {
+    ...imported.movement,
+    movimiento_id: null,
+    local_id: imported.localId,
+    localSeleccionado: local,
+    movimiento_checksum: `WEB-CANJE-${imported.localId}-${Date.now()}`,
+    movimiento_fecha: fecha,
+    movimiento_encargado: encargado,
+    movimiento_receptor: String(input.receptor ?? imported.movement.movimiento_receptor ?? '').trim(),
+    movimiento_observacion: String(input.observacion ?? imported.movement.movimiento_observacion ?? '').trim(),
+    movimiento_tipomovimiento: Number(type),
+    tipoMovimiento: Number(type),
+    almacenOrigenSeleccionado: imported.origin,
+    almacenDestinoSeleccionado: destination,
+    listaGuiaremisionImportada: ids,
+  };
+  const products = formatDetailsForRestaurant(imported.products, movement).filter((row) => Number(row.detallemovimiento_cantidad) > 0);
+  if (!products.length) throw new Error('Restaurant no devolvió cantidades válidas para canjear.');
+  const validation = await apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products);
+  if (String(validation.data ?? '') !== '0') throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems de la guía.');
+  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', { movimiento, productos: products });
+  const data = emulation.data ?? {};
+  if (data.operacionRestringidaPorStockNegativo) throw new Error('Restaurant restringió el canje porque dejaría stock negativo.');
+  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] });
+  const id = String(result.data?.movimiento_id ?? result.data?.id ?? result.data ?? '');
+  const verification = await Promise.all(ids.map(async (guideId) => {
+    try {
+      const source = await apiGet(page, session.token, `/logistica/rest/common/guiaremision/obtenerGuiaremision/${guideId}`);
+      const guide = source.data?.guiaremision ?? source.data ?? {};
+      return { id: guideId, recepcionada: guide.guiaremision_recepcionada ?? guide.recepcionada ?? null, movimientoId: String(guide.movimiento_id ?? '') };
+    } catch { return { id: guideId, recepcionada: null, movimientoId: '' }; }
+  }));
+  return { ok: true, id, mensajes: result.mensajes ?? [], verification };
 }
 
 async function buildNewMovement(page, session, input) {
