@@ -411,8 +411,18 @@ function guideDateErrors(guides, movementDate) {
 async function confirmGuideExchange(page, session, input) {
   if (input.confirmar !== true) throw new Error('Confirma el canje antes de registrar el movimiento.');
   const ids = guideIds(input);
-  await assertGuidesPending(page, session, ids);
-  const imported = await importedGuideMovement(page, session, ids);
+  const runStage = async (stage, work) => {
+    try {
+      console.log(`Canje de guía ${ids.join(',')}: ${stage}.`);
+      return await work();
+    } catch (error) {
+      console.error(`Canje de guía ${ids.join(',')} falló en ${stage}: ${error.message}`);
+      error.message = `Canje detenido en ${stage}: ${error.message}`;
+      throw error;
+    }
+  };
+  await runStage('validación de guías pendientes', () => assertGuidesPending(page, session, ids));
+  const imported = await runStage('hidratación de guías', () => importedGuideMovement(page, session, ids));
   const destinationId = String(input.almacen_destino ?? imported.destination.almacen_id);
   const destination = imported.destinations.find((row) => String(row.almacen_id ?? '') === destinationId);
   if (!destination) throw new Error('El almacén de destino ya no corresponde al destino de las guías en Restaurant.');
@@ -445,12 +455,12 @@ async function confirmGuideExchange(page, session, input) {
   };
   const products = formatDetailsForRestaurant(imported.products, movement).filter((row) => Number(row.detallemovimiento_cantidad) > 0);
   if (!products.length) throw new Error('Restaurant no devolvió cantidades válidas para canjear.');
-  const validation = await apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products);
+  const validation = await runStage('validación de stock', () => apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products));
   if (String(validation.data ?? '') !== '0') throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems de la guía.');
-  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', { movimiento, productos: products });
+  const emulation = await runStage('emulación de stock', () => apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', { movimiento, productos: products }));
   const data = emulation.data ?? {};
   if (data.operacionRestringidaPorStockNegativo) throw new Error('Restaurant restringió el canje porque dejaría stock negativo.');
-  const result = await apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] });
+  const result = await runStage('registro del movimiento', () => apiPost(page, session.token, '/logistica/rest/movimiento/agregar', { movimiento, productos: products, emulacionMovimiento: Array.isArray(data.movimientos) ? data.movimientos : [] }));
   const id = String(result.data?.movimiento_id ?? result.data?.id ?? result.data ?? '');
   const verification = await Promise.all(ids.map(async (guideId) => {
     try {
