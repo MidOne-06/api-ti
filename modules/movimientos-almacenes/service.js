@@ -37,9 +37,6 @@ export async function handleRequest(pathname, url, request, response) {
       if (query.length < 2 || !/^\d+$/.test(localId)) return json(response, 200, { items: [] });
       return json(response, 200, { items: await withSession((page, session) => items(page, session, query, localId)) });
     }
-    if (pathname === '/api/nuevo/previsualizar' && request.method === 'POST') {
-      return json(response, 200, await withSession(async (page, session) => previewNewMovement(page, session, await readJsonBody(request))));
-    }
     if (pathname === '/api/nuevo/guardar' && request.method === 'POST') {
       return json(response, 200, await withSession(async (page, session) => createNewMovement(page, session, await readJsonBody(request))));
     }
@@ -295,28 +292,6 @@ async function edit(page, session, id, input) {
     throw error;
   }
   return { ok: true, mensajes: result.mensajes ?? [] };
-}
-
-// Alta de movimientos: replica el orden del controlador nativo de Logística.
-// La emulación no guarda nada; el POST a movimiento/agregar sólo se ejecuta
-// cuando el usuario confirma Guardar desde el CRM.
-async function previewNewMovement(page, session, input) {
-  const { movement, products } = await buildNewMovement(page, session, input);
-  const validation = await apiPost(page, session.token, '/logistica/rest/movimiento/validarItemConControlDeStockEnAlmacenes', products);
-  if (String(validation.data ?? '') !== '0') {
-    throw new Error(firstMessage(validation) || 'Restaurant detectó un problema de stock en los ítems seleccionados.');
-  }
-  const emulation = await apiPost(page, session.token, '/logistica/rest/emulador/emularCambioStockEnMovimientos/2/4', {
-    movimiento: movement,
-    productos: products,
-  });
-  const data = emulation.data ?? {};
-  return {
-    ok: true,
-    movimientos: Array.isArray(data.movimientos) ? sanitizeRemoteData(data.movimientos) : [],
-    restringidoPorStockNegativo: Boolean(data.operacionRestringidaPorStockNegativo),
-    configuracionRestringirStockNegativo: Boolean(data.configuracionRestringirSalidasConStockNegativo),
-  };
 }
 
 async function createNewMovement(page, session, input) {
