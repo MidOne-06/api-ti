@@ -507,7 +507,7 @@ async function confirmBulkGuideExchange(page, session, input) {
         ids: currentGroup.ids,
         confirmar: true,
       });
-      results.push({ clave: currentGroup.clave, ids: currentGroup.ids, ok: true, id: result.id, verification: result.verification ?? [] });
+      results.push({ clave: currentGroup.clave, ids: currentGroup.ids, ok: true, id: result.id, verification: result.verification ?? [], overrides: result.overrides ?? [] });
     } catch (error) {
       results.push({ clave: currentGroup.clave, ids: currentGroup.ids, ok: false, error: error.message });
     }
@@ -555,16 +555,38 @@ function latestGuideDate(guides) {
 // Los ítems se vuelven a leer desde Restaurant justo antes de registrar. Solo
 // se reemplaza la cantidad visible, por posición, si el ACL vivo lo autoriza;
 // identificadores, almacenes y presentación nunca provienen del navegador.
+//
+// A propósito NO hay tope superior: el usuario confirmó (2026-09-13) que
+// recibir más cantidad de la que trae la guía original es un caso real de su
+// operación (el proveedor despachó de más, ajuste posterior, etc.), así que
+// editar hacia arriba tiene que seguir permitido igual que hacia abajo. Lo
+// que sí faltaba -- y esto lo cierra -- es dejar auditoría real de cada
+// edición: `overrides` devuelve, por cada ítem cuya cantidad cambió, el
+// código/descripción, la cantidad original que trajo Restaurant y la
+// confirmada, para que el CRM la persista con usuario y fecha (ver
+// `confirmGuideExchange` y `CanjeGuiaCantidadAuditoria` en el CRM).
 function applyGuideQuantityOverrides(products, submittedItems, canEditQuantity) {
-  if (!Array.isArray(submittedItems) || !submittedItems.length) return products;
+  if (!Array.isArray(submittedItems) || !submittedItems.length) return { products, overrides: [] };
   if (!canEditQuantity) throw new Error('Restaurant no autoriza editar las cantidades de esta guía para la sesión actual.');
   if (submittedItems.length !== products.length) throw new Error('Los ítems de la guía cambiaron en Restaurant. Vuelve a abrir el canje.');
 
-  return products.map((product, index) => {
+  const overrides = [];
+  const updated = products.map((product, index) => {
+    const original = Number(product.item_cantidad ?? product.detallemovimiento_cantidad ?? 0);
     const quantity = Number(submittedItems[index]?.cantidad);
     if (!Number.isFinite(quantity) || quantity < 0) throw new Error(`La cantidad del ítem ${index + 1} no es válida.`);
+    if (Math.abs(quantity - original) > 0.000001) {
+      overrides.push({
+        codigo: String(product.item_codigo ?? ''),
+        descripcion: String(product.item_descripcion ?? product.detallemovimiento_descripcion ?? ''),
+        cantidad_original: original,
+        cantidad_confirmada: quantity,
+      });
+    }
     return { ...product, item_cantidad: quantity };
   });
+
+  return { products: updated, overrides };
 }
 
 async function confirmGuideExchange(page, session, input) {
@@ -615,7 +637,7 @@ async function confirmGuideExchange(page, session, input) {
     almacenDestinoSeleccionado: destination,
     listaGuiaremisionImportada: ids,
   };
-  const sourceProducts = applyGuideQuantityOverrides(
+  const { products: sourceProducts, overrides } = applyGuideQuantityOverrides(
     imported.products,
     input.items,
     permissionTags.includes('movimientoentrealmacenes.editarcantidadguia'),
@@ -638,7 +660,7 @@ async function confirmGuideExchange(page, session, input) {
       return { id: guideId, recepcionada: guide.guiaremision_recepcionada ?? guide.recepcionada ?? null, movimientoId: String(guide.movimiento_id ?? '') };
     } catch { return { id: guideId, recepcionada: null, movimientoId: '' }; }
   }));
-  return { ok: true, id, mensajes: result.mensajes ?? [], verification };
+  return { ok: true, id, mensajes: result.mensajes ?? [], verification, overrides };
 }
 
 async function buildNewMovement(page, session, input) {
